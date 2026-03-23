@@ -6,28 +6,51 @@ import { autoUpdater } from 'electron-updater'
 
 let sessionDataPath = ''
 
+const logUpdater = (event: string, detail?: Record<string, unknown>): void => {
+  if (detail) {
+    console.log(`[updater] ${event}`, detail)
+    return
+  }
+  console.log(`[updater] ${event}`)
+}
+
 const setupAutoUpdater = (): void => {
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
 
   autoUpdater.on('checking-for-update', () => {
-    console.log('[updater] Checking for update...')
+    logUpdater('checking-for-update', { currentVersion: app.getVersion() })
   })
 
   autoUpdater.on('update-available', (info) => {
-    console.log(`[updater] Update available: ${info.version}`)
+    logUpdater('update-available', {
+      version: info.version,
+      releaseDate: info.releaseDate
+    })
   })
 
   autoUpdater.on('update-not-available', () => {
-    console.log('[updater] No updates available')
+    logUpdater('update-not-available', { currentVersion: app.getVersion() })
+  })
+
+  autoUpdater.on('download-progress', (progress) => {
+    logUpdater('download-progress', {
+      percent: Number(progress.percent.toFixed(2)),
+      transferred: progress.transferred,
+      total: progress.total,
+      bytesPerSecond: progress.bytesPerSecond
+    })
   })
 
   autoUpdater.on('error', (error) => {
-    console.error('[updater] Failed to check/install update:', error)
+    console.error('[updater] error', error)
   })
 
   autoUpdater.on('update-downloaded', async (info) => {
-    console.log(`[updater] Update downloaded: ${info.version}`)
+    logUpdater('update-downloaded', {
+      version: info.version,
+      releaseDate: info.releaseDate
+    })
     const result = await dialog.showMessageBox({
       type: 'info',
       title: '업데이트 준비 완료',
@@ -38,12 +61,13 @@ const setupAutoUpdater = (): void => {
     })
 
     if (result.response === 0) {
+      logUpdater('quit-and-install')
       autoUpdater.quitAndInstall()
     }
   })
 
   void autoUpdater.checkForUpdatesAndNotify().catch((error) => {
-    console.error('[updater] checkForUpdatesAndNotify failed:', error)
+    console.error('[updater] checkForUpdatesAndNotify-failed', error)
   })
 }
 
