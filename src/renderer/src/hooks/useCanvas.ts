@@ -981,7 +981,7 @@ export function useCanvas() {
   }, [])
 
   /** 텍스트 입력 모드 활성화 */
-  const enableTextMode = useCallback(() => {
+  const enableTextMode = useCallback((onComplete?: () => void) => {
     const canvas = canvasRef.current
     if (!canvas) return
 
@@ -999,6 +999,12 @@ export function useCanvas() {
     })
 
     const onMouseDown = (opt: fabric.TPointerEventInfo) => {
+      // 현재 편집 중인 텍스트박스가 있으면 무시 (editing:exited가 뒤따라 발생함)
+      const activeObject = canvas.getActiveObject()
+      if (activeObject && (activeObject as fabric.Textbox).isEditing) {
+        return
+      }
+
       const pointer = canvas.getScenePoint(opt.e)
 
       // 마우스 좌표 기반으로 객체 찾기 (evented: false인 객체도 감지)
@@ -1034,6 +1040,13 @@ export function useCanvas() {
       activeText.current = textbox
       ensureObjectId(textbox)
       canvas.add(textbox)
+
+      // 편집 완료 시 select 모드로 전환
+      const onEditingExited = () => {
+        textbox.off('editing:exited', onEditingExited)
+        onComplete?.()
+      }
+      textbox.on('editing:exited', onEditingExited)
 
       // 편집 모드 진입
       setTimeout(() => {

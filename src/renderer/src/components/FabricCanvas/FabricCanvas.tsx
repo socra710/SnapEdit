@@ -99,7 +99,7 @@ export default function FabricCanvas() {
         cleanupRef.current = enableArrowMode(() => setActiveTool('select')) || null
         break
       case 'text':
-        cleanupRef.current = enableTextMode() || null
+        cleanupRef.current = enableTextMode(() => setActiveTool('select')) || null
         break
       case 'number':
         cleanupRef.current = enableNumberMode() || null
