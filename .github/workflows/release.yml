@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: build:win
+            artifact_name: windows
+            artifact_path: dist/*setup.exe
+          - os: macos-latest
+            script: build:mac
+            artifact_name: macos
+            artifact_path: dist/*.dmg
+          - os: ubuntu-latest
+            script: build:linux
+            artifact_name: linux
+            artifact_path: |
+              dist/*.AppImage
+              dist/*.deb
+              dist/*.snap
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and package
+        run: npm run ${{ matrix.script }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WIN_CERTIFICATE_FILE: ${{ secrets.WIN_CERTIFICATE_FILE }}
+          WIN_CERTIFICATE_PASSWORD: ${{ secrets.WIN_CERTIFICATE_PASSWORD }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/**
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

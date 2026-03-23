@@ -8,6 +8,7 @@ export default function FabricCanvas() {
   const {
     getCanvas,
     initCanvas,
+    cleanup,
     loadBackground,
     enableRectMode,
     enableArrowMode,
@@ -37,7 +38,10 @@ export default function FabricCanvas() {
     if (elRef.current) {
       initCanvas(elRef.current)
     }
-  }, [initCanvas])
+    return () => {
+      cleanup()
+    }
+  }, [cleanup, initCanvas])
 
   // 배경 이미지 변경 시 캔버스에 로드
   useEffect(() => {
@@ -195,6 +199,7 @@ export default function FabricCanvas() {
           window.dispatchEvent(new CustomEvent('snapedit:copy-success'))
         } catch {
           showToast('복사에 실패했습니다. 다시 시도해 주세요.', 'error')
+          window.dispatchEvent(new CustomEvent('snapedit:copy-failed'))
         }
       }
 

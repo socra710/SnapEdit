@@ -131,8 +131,16 @@ export default function Toolbar() {
       window.setTimeout(() => setCopied(false), 1200)
     }
 
+    const handleCopyFailed = () => {
+      setCopied(false)
+    }
+
     window.addEventListener('snapedit:copy-success', handleCopySuccess)
-    return () => window.removeEventListener('snapedit:copy-success', handleCopySuccess)
+    window.addEventListener('snapedit:copy-failed', handleCopyFailed)
+    return () => {
+      window.removeEventListener('snapedit:copy-success', handleCopySuccess)
+      window.removeEventListener('snapedit:copy-failed', handleCopyFailed)
+    }
   }, [])
 
   useEffect(() => {

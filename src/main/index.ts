@@ -1,7 +1,65 @@
-import { app, shell, BrowserWindow, ipcMain, clipboard, nativeImage } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, clipboard, nativeImage, dialog } from 'electron'
 import { join } from 'path'
-import { mkdirSync } from 'fs'
+import { mkdirSync, rmSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { autoUpdater } from 'electron-updater'
+
+let sessionDataPath = ''
+
+const setupAutoUpdater = (): void => {
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('checking-for-update', () => {
+    console.log('[updater] Checking for update...')
+  })
+
+  autoUpdater.on('update-available', (info) => {
+    console.log(`[updater] Update available: ${info.version}`)
+  })
+
+  autoUpdater.on('update-not-available', () => {
+    console.log('[updater] No updates available')
+  })
+
+  autoUpdater.on('error', (error) => {
+    console.error('[updater] Failed to check/install update:', error)
+  })
+
+  autoUpdater.on('update-downloaded', async (info) => {
+    console.log(`[updater] Update downloaded: ${info.version}`)
+    const result = await dialog.showMessageBox({
+      type: 'info',
+      title: '업데이트 준비 완료',
+      message: '새 버전이 다운로드되었습니다. 지금 재시작할까요?',
+      buttons: ['지금 재시작', '나중에'],
+      defaultId: 0,
+      cancelId: 1
+    })
+
+    if (result.response === 0) {
+      autoUpdater.quitAndInstall()
+    }
+  })
+
+  void autoUpdater.checkForUpdatesAndNotify().catch((error) => {
+    console.error('[updater] checkForUpdatesAndNotify failed:', error)
+  })
+}
+
+const isPngDataUrl = (value: string): boolean => {
+  return /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value)
+}
+
+const validateClipboardImageDataUrl = (dataUrl: unknown): dataUrl is string => {
+  if (typeof dataUrl !== 'string' || dataUrl.length === 0) {
+    return false
+  }
+  if (dataUrl.length > 15 * 1024 * 1024) {
+    return false
+  }
+  return isPngDataUrl(dataUrl)
+}
 
 function createWindow(): void {
   // Create the browser window.
@@ -16,7 +74,9 @@ function createWindow(): void {
     title: 'SnapEdit',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false
     }
   })
 
@@ -32,9 +92,13 @@ function createWindow(): void {
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    void mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']).catch((error) => {
+      console.error('[main] Failed to load renderer URL:', error)
+    })
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    void mainWindow.loadFile(join(__dirname, '../renderer/index.html')).catch((error) => {
+      console.error('[main] Failed to load renderer file:', error)
+    })
   }
 }
 
@@ -42,7 +106,7 @@ function createWindow(): void {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
-  const sessionDataPath = join(app.getPath('temp'), 'SnapEdit', 'session')
+  sessionDataPath = join(app.getPath('temp'), 'SnapEdit', 'session')
   mkdirSync(sessionDataPath, { recursive: true })
   app.setPath('sessionData', sessionDataPath)
 
@@ -61,25 +125,62 @@ app.whenReady().then(() => {
 
   // Clipboard: 이미지 읽기 — PNG buffer를 base64 dataURL로 반환
   ipcMain.handle('clipboard:read-image', () => {
-    const img = clipboard.readImage()
-    if (img.isEmpty()) return null
-    const base64 = img.toPNG().toString('base64')
-    return `data:image/png;base64,${base64}`
+    try {
+      const img = clipboard.readImage()
+      if (img.isEmpty()) return null
+      const base64 = img.toPNG().toString('base64')
+      return `data:image/png;base64,${base64}`
+    } catch (error) {
+      console.error('[main] clipboard:read-image failed:', error)
+      return null
+    }
   })
 
   // Clipboard: 이미지 쓰기 — dataURL을 NativeImage로 변환 후 클립보드에 복사
-  ipcMain.handle('clipboard:write-image', (_event, dataUrl: string) => {
-    const img = nativeImage.createFromDataURL(dataUrl)
-    clipboard.writeImage(img)
+  ipcMain.handle('clipboard:write-image', (_event, dataUrl: unknown) => {
+    try {
+      if (!validateClipboardImageDataUrl(dataUrl)) {
+        throw new Error('Invalid clipboard payload: only PNG dataURL is supported')
+      }
+      const img = nativeImage.createFromDataURL(dataUrl)
+      if (img.isEmpty()) {
+        throw new Error('Invalid clipboard payload: image decode failed')
+      }
+      clipboard.writeImage(img)
+    } catch (error) {
+      console.error('[main] clipboard:write-image failed:', error)
+      throw error
+    }
+  })
+
+  process.on('uncaughtException', (error) => {
+    console.error('[main] uncaughtException:', error)
+  })
+
+  process.on('unhandledRejection', (reason) => {
+    console.error('[main] unhandledRejection:', reason)
   })
 
   createWindow()
+
+  if (app.isPackaged) {
+    setupAutoUpdater()
+  }
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the
     // dock icon is clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+app.on('before-quit', () => {
+  if (!sessionDataPath) return
+  try {
+    rmSync(sessionDataPath, { recursive: true, force: true })
+  } catch (error) {
+    console.error('[main] Failed to cleanup session data:', error)
+  }
 })
 
 // Quit when all windows are closed, except on macOS. There, it's common
