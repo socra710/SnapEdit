@@ -1,5 +1,6 @@
 import { useRef, useCallback } from 'react'
 import * as fabric from 'fabric'
+import { useEditorStore } from '@renderer/store/editorStore'
 
 const fabricCustomProperties = (fabric.FabricObject as any).customProperties ?? []
 if (!fabricCustomProperties.includes('data')) {
@@ -24,6 +25,7 @@ interface ConnectorEntry {
 }
 
 const MAX_HISTORY_STEPS = 80
+const HISTORY_DEBOUNCE_MS = 100
 
 export function useCanvas() {
   const canvasRef = useRef<fabric.Canvas | null>(null)
@@ -45,20 +47,32 @@ export function useCanvas() {
   const historyIndexRef = useRef(-1)
   const isRestoringHistoryRef = useRef(false)
   const historyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const renderRafRef = useRef<number | null>(null)
+
+  const syncHistoryState = () => {
+    useEditorStore.getState().setHistoryState({
+      canUndo: historyIndexRef.current > 0,
+      canRedo: historyIndexRef.current < historyRef.current.length - 1
+    })
+  }
 
   const isAnchorSide = (value: unknown): value is AnchorSide => {
     return value === 'top' || value === 'right' || value === 'bottom' || value === 'left'
   }
 
   const getObjectData = (obj: fabric.Object): Record<string, unknown> => {
-    return ((obj as any).data ?? {}) as Record<string, unknown>
+    const value = (obj as fabric.Object & { data?: unknown }).data
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {}
+    }
+    return value as Record<string, unknown>
   }
 
   const patchObjectData = (obj: fabric.Object, patch: Record<string, unknown>) => {
     const prevData = getObjectData(obj)
-    ;(obj as any).data = {
+    ;(obj as fabric.Object & { data?: Record<string, unknown> }).data = {
       ...prevData,
-      ...patch,
+      ...patch
     }
   }
 
@@ -113,7 +127,10 @@ export function useCanvas() {
     return null
   }
 
-  const isConnectableObject = (canvas: fabric.Canvas, obj: fabric.Object | null): obj is fabric.Object => {
+  const isConnectableObject = (
+    canvas: fabric.Canvas,
+    obj: fabric.Object | null
+  ): obj is fabric.Object => {
     if (!obj) return false
     if (obj === canvas.backgroundImage) return false
     if (isConnectorPart(obj)) return false
@@ -125,7 +142,7 @@ export function useCanvas() {
     const bounds = obj.getBoundingRect()
     return {
       x: bounds.left + bounds.width / 2,
-      y: bounds.top + bounds.height / 2,
+      y: bounds.top + bounds.height / 2
     }
   }
 
@@ -142,7 +159,7 @@ export function useCanvas() {
       top: { x: centerX, y: top },
       right: { x: right, y: centerY },
       bottom: { x: centerX, y: bottom },
-      left: { x: left, y: centerY },
+      left: { x: left, y: centerY }
     }
   }
 
@@ -185,7 +202,7 @@ export function useCanvas() {
       activeArrowSource.current.set({
         opacity: activeArrowSourceOpacity.current,
         selectable: false,
-        evented: false,
+        evented: false
       })
       activeArrowSource.current = null
     }
@@ -206,11 +223,16 @@ export function useCanvas() {
       x1: sourcePoint.x,
       y1: sourcePoint.y,
       x2: targetPoint.x,
-      y2: targetPoint.y,
+      y2: targetPoint.y
     })
     connector.line.setCoords()
 
-    const headPoints = calculateArrowHeadPoints(sourcePoint.x, sourcePoint.y, targetPoint.x, targetPoint.y)
+    const headPoints = calculateArrowHeadPoints(
+      sourcePoint.x,
+      sourcePoint.y,
+      targetPoint.x,
+      targetPoint.y
+    )
     connector.head.set({ points: headPoints })
     connector.head.setCoords()
     return true
@@ -233,7 +255,10 @@ export function useCanvas() {
 
   const removeConnectorsForObjectId = (canvas: fabric.Canvas, objectId: string) => {
     const connectorIds = Array.from(connectorsRef.current.entries())
-      .filter(([, connector]) => connector.sourceObjectId === objectId || connector.targetObjectId === objectId)
+      .filter(
+        ([, connector]) =>
+          connector.sourceObjectId === objectId || connector.targetObjectId === objectId
+      )
       .map(([id]) => id)
 
     connectorIds.forEach((connectorId) => {
@@ -252,6 +277,36 @@ export function useCanvas() {
 
     invalidIds.forEach((connectorId) => {
       removeConnectorById(canvas, connectorId)
+    })
+  }
+
+  const updateConnectorsForObject = (canvas: fabric.Canvas, target: fabric.Object) => {
+    const objectId = getObjectData(target).objectId
+    if (typeof objectId !== 'string') {
+      updateAllConnectors(canvas)
+      return
+    }
+
+    const invalidIds: string[] = []
+    connectorsRef.current.forEach((connector, connectorId) => {
+      if (connector.sourceObjectId !== objectId && connector.targetObjectId !== objectId) return
+      const updated = updateConnector(canvas, connector)
+      if (!updated) {
+        invalidIds.push(connectorId)
+      }
+    })
+
+    invalidIds.forEach((connectorId) => {
+      removeConnectorById(canvas, connectorId)
+    })
+  }
+
+  const scheduleCanvasRender = (canvas: fabric.Canvas) => {
+    if (renderRafRef.current !== null) return
+
+    renderRafRef.current = window.requestAnimationFrame(() => {
+      renderRafRef.current = null
+      canvas.renderAll()
     })
   }
 
@@ -277,7 +332,7 @@ export function useCanvas() {
         selectable: false,
         evented: false,
         strokeDashArray: [6, 4],
-        opacity: 0.75,
+        opacity: 0.75
       })
       patchObjectData(previewLine, { isArrowPreview: true })
       activeArrow.current = previewLine
@@ -287,32 +342,39 @@ export function useCanvas() {
         x1: sourcePoint.x,
         y1: sourcePoint.y,
         x2: endPoint.x,
-        y2: endPoint.y,
+        y2: endPoint.y
       })
       activeArrow.current.setCoords()
     }
 
     if (!activeArrowHead.current) {
-      const previewHead = new fabric.Polygon(calculateArrowHeadPoints(sourcePoint.x, sourcePoint.y, endPoint.x, endPoint.y), {
-        fill: '#FF0000',
-        stroke: '#FF0000',
-        strokeWidth: 0,
-        selectable: false,
-        evented: false,
-        opacity: 0.75,
-      })
+      const previewHead = new fabric.Polygon(
+        calculateArrowHeadPoints(sourcePoint.x, sourcePoint.y, endPoint.x, endPoint.y),
+        {
+          fill: '#FF0000',
+          stroke: '#FF0000',
+          strokeWidth: 0,
+          selectable: false,
+          evented: false,
+          opacity: 0.75
+        }
+      )
       patchObjectData(previewHead, { isArrowPreview: true })
       activeArrowHead.current = previewHead
       canvas.add(previewHead)
     } else {
       activeArrowHead.current.set({
-        points: calculateArrowHeadPoints(sourcePoint.x, sourcePoint.y, endPoint.x, endPoint.y),
+        points: calculateArrowHeadPoints(sourcePoint.x, sourcePoint.y, endPoint.x, endPoint.y)
       })
       activeArrowHead.current.setCoords()
     }
   }
 
-  const createConnector = (canvas: fabric.Canvas, sourceObj: fabric.Object, targetObj: fabric.Object) => {
+  const createConnector = (
+    canvas: fabric.Canvas,
+    sourceObj: fabric.Object,
+    targetObj: fabric.Object
+  ) => {
     const sourceObjectId = ensureObjectId(sourceObj)
     const targetObjectId = ensureObjectId(targetObj)
     const connectorId = `connector-${connectorIdCounter.current++}`
@@ -327,16 +389,19 @@ export function useCanvas() {
       strokeWidth: 2,
       fill: 'transparent',
       selectable: true,
-      evented: true,
+      evented: true
     })
 
-    const head = new fabric.Polygon(calculateArrowHeadPoints(sourcePoint.x, sourcePoint.y, targetPoint.x, targetPoint.y), {
-      fill: '#FF0000',
-      stroke: '#FF0000',
-      strokeWidth: 0,
-      selectable: false,
-      evented: false,
-    })
+    const head = new fabric.Polygon(
+      calculateArrowHeadPoints(sourcePoint.x, sourcePoint.y, targetPoint.x, targetPoint.y),
+      {
+        fill: '#FF0000',
+        stroke: '#FF0000',
+        strokeWidth: 0,
+        selectable: false,
+        evented: false
+      }
+    )
 
     patchObjectData(line, {
       isConnectorPart: true,
@@ -345,13 +410,13 @@ export function useCanvas() {
       sourceObjectId,
       targetObjectId,
       sourceAnchor,
-      targetAnchor,
+      targetAnchor
     })
 
     patchObjectData(head, {
       isConnectorPart: true,
       connectorPart: 'head',
-      connectorId,
+      connectorId
     })
 
     const connector: ConnectorEntry = {
@@ -361,7 +426,7 @@ export function useCanvas() {
       sourceObjectId,
       targetObjectId,
       sourceAnchor,
-      targetAnchor,
+      targetAnchor
     }
 
     connectorsRef.current.set(connectorId, connector)
@@ -469,7 +534,7 @@ export function useCanvas() {
           sourceObjectId: entry.sourceObjectId,
           targetObjectId: entry.targetObjectId,
           sourceAnchor: entry.sourceAnchor,
-          targetAnchor: entry.targetAnchor,
+          targetAnchor: entry.targetAnchor
         })
       }
     })
@@ -480,8 +545,16 @@ export function useCanvas() {
 
   const captureHistorySnapshot = (canvas: fabric.Canvas) => {
     if (isRestoringHistoryRef.current) return
-
-    const snapshot = JSON.stringify(canvas.toJSON())
+    let snapshot = ''
+    try {
+      snapshot = JSON.stringify(canvas.toJSON())
+    } catch (error) {
+      console.error('히스토리 스냅샷 생성 실패:', error)
+      useEditorStore
+        .getState()
+        .showToast('히스토리 저장에 실패했습니다. 작업을 다시 시도해 주세요.', 'error')
+      return
+    }
     const currentSnapshot = historyRef.current[historyIndexRef.current]
 
     if (snapshot === currentSnapshot) return
@@ -498,6 +571,7 @@ export function useCanvas() {
     }
 
     historyIndexRef.current = historyRef.current.length - 1
+    syncHistoryState()
   }
 
   const queueHistorySnapshot = (canvas: fabric.Canvas, target?: fabric.Object) => {
@@ -511,7 +585,7 @@ export function useCanvas() {
     historyTimerRef.current = setTimeout(() => {
       historyTimerRef.current = null
       captureHistorySnapshot(canvas)
-    }, 0)
+    }, HISTORY_DEBOUNCE_MS)
   }
 
   const restoreHistoryAt = async (canvas: fabric.Canvas, index: number) => {
@@ -530,6 +604,12 @@ export function useCanvas() {
       updateAllConnectors(canvas)
       canvas.renderAll()
       historyIndexRef.current = index
+      syncHistoryState()
+    } catch (error) {
+      console.error('히스토리 복원 실패:', error)
+      useEditorStore
+        .getState()
+        .showToast('실행 취소/다시 실행에 실패했습니다. 다시 시도해 주세요.', 'error')
     } finally {
       isRestoringHistoryRef.current = false
     }
@@ -546,8 +626,14 @@ export function useCanvas() {
     const angle = Math.atan2(y2 - y1, x2 - x1)
     const points: fabric.XY[] = [
       { x: x2, y: y2 },
-      { x: x2 - headsize * Math.cos(angle - Math.PI / 6), y: y2 - headsize * Math.sin(angle - Math.PI / 6) },
-      { x: x2 - headsize * Math.cos(angle + Math.PI / 6), y: y2 - headsize * Math.sin(angle + Math.PI / 6) },
+      {
+        x: x2 - headsize * Math.cos(angle - Math.PI / 6),
+        y: y2 - headsize * Math.sin(angle - Math.PI / 6)
+      },
+      {
+        x: x2 - headsize * Math.cos(angle + Math.PI / 6),
+        y: y2 - headsize * Math.sin(angle + Math.PI / 6)
+      }
     ]
     return points
   }
@@ -563,6 +649,7 @@ export function useCanvas() {
     historyIndexRef.current = -1
     isRestoringHistoryRef.current = false
     connectorsRef.current.clear()
+    syncHistoryState()
 
     if (canvasRef.current) {
       canvasRef.current.dispose()
@@ -570,12 +657,17 @@ export function useCanvas() {
 
     const canvas = new fabric.Canvas(el, {
       selection: true,
-      preserveObjectStacking: true,
+      preserveObjectStacking: true
     })
 
     canvas.on('object:moving', () => {
-      updateAllConnectors(canvas)
-      canvas.renderAll()
+      const active = canvas.getActiveObject()
+      if (active) {
+        updateConnectorsForObject(canvas, active as fabric.Object)
+      } else {
+        updateAllConnectors(canvas)
+      }
+      scheduleCanvasRender(canvas)
     })
 
     canvas.on('object:added', (event) => {
@@ -583,9 +675,14 @@ export function useCanvas() {
     })
 
     canvas.on('object:modified', (event) => {
-      updateAllConnectors(canvas)
-      queueHistorySnapshot(canvas, event.target as fabric.Object | undefined)
-      canvas.renderAll()
+      const target = event.target as fabric.Object | undefined
+      if (target) {
+        updateConnectorsForObject(canvas, target)
+      } else {
+        updateAllConnectors(canvas)
+      }
+      queueHistorySnapshot(canvas, target)
+      scheduleCanvasRender(canvas)
     })
 
     canvas.on('object:removed', (event) => {
@@ -629,6 +726,7 @@ export function useCanvas() {
     rebuildConnectorsFromCanvas(canvas)
     canvasRef.current = canvas
     captureHistorySnapshot(canvas)
+    syncHistoryState()
   }, [])
 
   /** dataURL 이미지를 캔버스 배경으로 불러오기 */
@@ -636,24 +734,29 @@ export function useCanvas() {
     const canvas = canvasRef.current
     if (!canvas) return
 
-    const img = await fabric.FabricImage.fromURL(dataUrl)
-    const { width, height } = img
+    try {
+      const img = await fabric.FabricImage.fromURL(dataUrl)
+      const { width, height } = img
 
-    // 화면 크기에 맞게 축소 (최대 1200x800)
-    const maxW = 1200
-    const maxH = 800
-    const scale = Math.min(1, maxW / width, maxH / height)
-    const displayW = Math.round(width * scale)
-    const displayH = Math.round(height * scale)
+      // 화면 크기에 맞게 축소 (최대 1200x800)
+      const maxW = 1200
+      const maxH = 800
+      const scale = Math.min(1, maxW / width, maxH / height)
+      const displayW = Math.round(width * scale)
+      const displayH = Math.round(height * scale)
 
-    canvas.setWidth(displayW)
-    canvas.setHeight(displayH)
+      canvas.setWidth(displayW)
+      canvas.setHeight(displayH)
 
-    img.scaleX = scale
-    img.scaleY = scale
-    canvas.backgroundImage = img
-    canvas.renderAll()
-    captureHistorySnapshot(canvas)
+      img.scaleX = scale
+      img.scaleY = scale
+      canvas.backgroundImage = img
+      canvas.renderAll()
+      captureHistorySnapshot(canvas)
+    } catch (error) {
+      console.error('배경 이미지 로드 실패:', error)
+      useEditorStore.getState().showToast('이미지를 불러올 수 없습니다.', 'error')
+    }
   }, [])
 
   /** 사각형 드로잉 모드 활성화 */
@@ -676,7 +779,7 @@ export function useCanvas() {
 
     const onMouseDown = (opt: fabric.TPointerEventInfo) => {
       const pointer = canvas.getScenePoint(opt.e)
-      
+
       // 먼저 클릭한 기존 객체가 있는지 확인
       const target = canvas.findTarget(opt.e as PointerEvent)
       if (target && target !== canvas.backgroundImage) {
@@ -686,7 +789,7 @@ export function useCanvas() {
         canvas.renderAll()
         return
       }
-      
+
       // 빈 캔버스 영역을 클릭했으면 새로운 사각형 그리기
       isDrawing.current = true
       startPoint.current = { x: pointer.x, y: pointer.y }
@@ -705,10 +808,10 @@ export function useCanvas() {
           color: 'rgba(255, 0, 0, 0.35)',
           blur: 10,
           offsetX: 0,
-          offsetY: 2,
+          offsetY: 2
         }),
         selectable: false,
-        evented: false,
+        evented: false
       })
 
       activeRect.current = rect
@@ -726,7 +829,7 @@ export function useCanvas() {
       const height = Math.abs(pointer.y - startY)
 
       activeRect.current.set({ left, top, width, height })
-      canvas.renderAll()
+      scheduleCanvasRender(canvas)
     }
 
     const onMouseUp = () => {
@@ -763,7 +866,7 @@ export function useCanvas() {
   }, [])
 
   /** 화살표 드로잉 모드 활성화 */
-  const enableArrowMode = useCallback(() => {
+  const enableArrowMode = useCallback((onArrowComplete?: () => void) => {
     const canvas = canvasRef.current
     if (!canvas) return
 
@@ -787,7 +890,7 @@ export function useCanvas() {
 
       const hitObject = findTopObjectAtPointer(canvas, pointer, {
         includeConnectors: true,
-        includePreview: false,
+        includePreview: false
       })
 
       if (!hitObject) {
@@ -837,8 +940,10 @@ export function useCanvas() {
       }
 
       createConnector(canvas, sourceObject, hitObject)
-      drawArrowPreview(canvas, sourceObject, pointer, hitObject)
+      clearArrowPreview(canvas)
+      clearArrowSource()
       canvas.renderAll()
+      onArrowComplete?.()
     }
 
     const onMouseMove = (opt: fabric.TPointerEventInfo) => {
@@ -848,7 +953,7 @@ export function useCanvas() {
 
       const hoveredObject = findTopObjectAtPointer(canvas, pointer, {
         includeConnectors: false,
-        includePreview: false,
+        includePreview: false
       })
 
       const targetObject =
@@ -859,7 +964,7 @@ export function useCanvas() {
           : null
 
       drawArrowPreview(canvas, activeArrowSource.current, pointer, targetObject)
-      canvas.renderAll()
+      scheduleCanvasRender(canvas)
     }
 
     canvas.on('mouse:down', onMouseDown)
@@ -901,10 +1006,7 @@ export function useCanvas() {
       let target: fabric.Object | null = null
       for (let i = objects.length - 1; i >= 0; i--) {
         const obj = objects[i]
-        if (
-          obj !== canvas.backgroundImage &&
-          obj.containsPoint(pointer)
-        ) {
+        if (obj !== canvas.backgroundImage && obj.containsPoint(pointer)) {
           target = obj
           break
         }
@@ -926,13 +1028,13 @@ export function useCanvas() {
         fill: '#000000',
         width: 200,
         selectable: false,
-        evented: false,
+        evented: false
       })
 
       activeText.current = textbox
       ensureObjectId(textbox)
       canvas.add(textbox)
-      
+
       // 편집 모드 진입
       setTimeout(() => {
         textbox.enterEditing()
@@ -988,7 +1090,7 @@ export function useCanvas() {
         radius: badgeRadius,
         fill: '#FF0000',
         originX: 'center',
-        originY: 'center',
+        originY: 'center'
       })
 
       const label = new fabric.Text(currentNumber, {
@@ -997,7 +1099,7 @@ export function useCanvas() {
         fontFamily: 'Arial',
         fill: '#FFFFFF',
         originX: 'center',
-        originY: 'center',
+        originY: 'center'
       })
 
       const badge = new fabric.Group([circle, label], {
@@ -1006,7 +1108,7 @@ export function useCanvas() {
         originX: 'center',
         originY: 'center',
         selectable: false,
-        evented: false,
+        evented: false
       })
 
       activeNumber.current = badge
@@ -1045,7 +1147,7 @@ export function useCanvas() {
 
     const onMouseDown = (opt: fabric.TPointerEventInfo) => {
       const pointer = canvas.getScenePoint(opt.e)
-      
+
       // 먼저 클릭한 기존 객체가 있는지 확인
       const target = canvas.findTarget(opt.e as PointerEvent)
       if (target && target !== canvas.backgroundImage) {
@@ -1055,7 +1157,7 @@ export function useCanvas() {
         canvas.renderAll()
         return
       }
-      
+
       // 빈 캔버스 영역을 클릭했으면 새로운 블러 박스 그리기
       isDrawing.current = true
       startPoint.current = { x: pointer.x, y: pointer.y }
@@ -1070,7 +1172,7 @@ export function useCanvas() {
         strokeWidth: 2,
         strokeDashArray: [6, 4],
         selectable: false,
-        evented: false,
+        evented: false
       })
 
       activeBlur.current = blur
@@ -1088,7 +1190,7 @@ export function useCanvas() {
       const height = Math.abs(pointer.y - startY)
 
       activeBlur.current.set({ left, top, width, height })
-      canvas.renderAll()
+      scheduleCanvasRender(canvas)
     }
 
     const onMouseUp = async () => {
@@ -1117,7 +1219,7 @@ export function useCanvas() {
             top,
             width,
             height,
-            multiplier: 1,
+            multiplier: 1
           })
 
           const blurredPatch = await fabric.FabricImage.fromURL(patchDataUrl)
@@ -1127,7 +1229,7 @@ export function useCanvas() {
             left,
             top,
             selectable: true,
-            evented: true,
+            evented: true
           })
 
           ensureObjectId(blurredPatch)
@@ -1135,6 +1237,7 @@ export function useCanvas() {
           canvas.setActiveObject(blurredPatch)
         } catch (error) {
           console.error('블러 패치 생성 실패:', error)
+          useEditorStore.getState().showToast('블러 효과 적용에 실패했습니다.', 'error')
         }
       }
 
@@ -1247,6 +1350,21 @@ export function useCanvas() {
     return canvasRef.current
   }, [])
 
+  const cleanup = useCallback(() => {
+    if (historyTimerRef.current) {
+      clearTimeout(historyTimerRef.current)
+      historyTimerRef.current = null
+    }
+    if (renderRafRef.current !== null) {
+      window.cancelAnimationFrame(renderRafRef.current)
+      renderRafRef.current = null
+    }
+    if (canvasRef.current) {
+      canvasRef.current.dispose()
+      canvasRef.current = null
+    }
+  }, [])
+
   return {
     canvasRef,
     getCanvas,
@@ -1263,5 +1381,6 @@ export function useCanvas() {
     deleteSelected,
     undo,
     redo,
+    cleanup
   }
 }
