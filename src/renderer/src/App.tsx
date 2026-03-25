@@ -4,7 +4,7 @@ import Toolbar from '@renderer/components/Toolbar/Toolbar'
 
 function App(): React.JSX.Element {
   return (
-    <div className="min-h-screen bg-[#1E1E1E] flex flex-col items-center justify-center overflow-hidden pb-24">
+    <div className="min-h-screen bg-[#1E1E1E] flex flex-col items-center justify-center overflow-hidden pb-32">
       <ToastHost />
       <FabricCanvas />
       <Toolbar />

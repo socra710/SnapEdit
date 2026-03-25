@@ -29,6 +29,7 @@ export default function FabricCanvas() {
   } = useCanvas()
 
   const activeTool = useEditorStore((s) => s.activeTool)
+  const arrowRouting = useEditorStore((s) => s.arrowRouting)
   const showShortcuts = useEditorStore((s) => s.showShortcuts)
   const setActiveTool = useEditorStore((s) => s.setActiveTool)
   const setShowShortcuts = useEditorStore((s) => s.setShowShortcuts)
@@ -201,6 +202,7 @@ export default function FabricCanvas() {
     }
   }, [
     activeTool,
+    arrowRouting,
     enableRectMode,
     enableArrowMode,
     setActiveTool,

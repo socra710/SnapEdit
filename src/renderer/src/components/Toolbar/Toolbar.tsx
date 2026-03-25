@@ -1,4 +1,4 @@
-﻿import { useEditorStore, type Tool } from '@renderer/store/editorStore'
+﻿import { useEditorStore, type ArrowRouting, type Tool } from '@renderer/store/editorStore'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 
@@ -8,6 +8,11 @@ interface ToolDef {
   title: string
   icon: React.ReactNode
 }
+
+const arrowRoutingOptions: Array<{ value: ArrowRouting; label: string }> = [
+  { value: 'straight', label: '직선' },
+  { value: 'elbow', label: '엘보' }
+]
 
 const tools: ToolDef[] = [
   {
@@ -115,6 +120,8 @@ const tools: ToolDef[] = [
 export default function Toolbar() {
   const activeTool = useEditorStore((s) => s.activeTool)
   const setActiveTool = useEditorStore((s) => s.setActiveTool)
+  const arrowRouting = useEditorStore((s) => s.arrowRouting)
+  const setArrowRouting = useEditorStore((s) => s.setArrowRouting)
   const canUndo = useEditorStore((s) => s.canUndo)
   const canRedo = useEditorStore((s) => s.canRedo)
   const showShortcuts = useEditorStore((s) => s.showShortcuts)
@@ -192,6 +199,10 @@ export default function Toolbar() {
     }
   }
 
+  const handleArrowRoutingChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    setArrowRouting(event.target.value as ArrowRouting)
+  }
+
   useEffect(() => {
     const toolbarEl = toolbarRef.current
     if (!toolbarEl) return
@@ -230,7 +241,7 @@ export default function Toolbar() {
         ref={toolbarRef}
         role="toolbar"
         aria-label="편집 도구"
-        className="flex items-center gap-1 px-3 py-2 rounded-2xl bg-zinc-900/80 backdrop-blur-md border border-white/8 shadow-[0_8px_32px_rgba(0,0,0,0.5)]"
+        className="flex flex-col gap-2 px-3 py-2 rounded-2xl bg-zinc-900/80 backdrop-blur-md border border-white/8 shadow-[0_8px_32px_rgba(0,0,0,0.5)]"
       >
         <input
           ref={fileInputRef}
@@ -240,226 +251,243 @@ export default function Toolbar() {
           onChange={handleImageFileChange}
         />
 
-        <button
-          title="되돌리기 (Ctrl+Z)"
-          aria-label="되돌리기"
-          disabled={!canUndo}
-          onClick={() => {
-            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true }))
-          }}
-          className={[
-            'flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900',
-            canUndo
-              ? 'text-zinc-300 hover:text-white hover:bg-white/8'
-              : 'text-zinc-600 cursor-not-allowed opacity-50'
-          ].join(' ')}
-        >
-          <svg
-            className="w-5 h-5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            aria-hidden="true"
+        <div className="flex items-center gap-1">
+          <button
+            title="되돌리기 (Ctrl+Z)"
+            aria-label="되돌리기"
+            disabled={!canUndo}
+            onClick={() => {
+              window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true }))
+            }}
+            className={[
+              'flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900',
+              canUndo
+                ? 'text-zinc-300 hover:text-white hover:bg-white/8'
+                : 'text-zinc-600 cursor-not-allowed opacity-50'
+            ].join(' ')}
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.8}
-              d="M9 14L4 9m0 0l5-5M4 9h10a6 6 0 016 6v1"
-            />
-          </svg>
-          <span className="leading-none">Undo</span>
-        </button>
-
-        <button
-          title="다시 실행 (Ctrl+Y)"
-          aria-label="다시 실행"
-          disabled={!canRedo}
-          onClick={() => {
-            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'y', ctrlKey: true }))
-          }}
-          className={[
-            'flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900',
-            canRedo
-              ? 'text-zinc-300 hover:text-white hover:bg-white/8'
-              : 'text-zinc-600 cursor-not-allowed opacity-50'
-          ].join(' ')}
-        >
-          <svg
-            className="w-5 h-5"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            aria-hidden="true"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.8}
-              d="M15 14l5-5m0 0l-5-5m5 5H10a6 6 0 00-6 6v1"
-            />
-          </svg>
-          <span className="leading-none">Redo</span>
-        </button>
-
-        <div className="w-px h-8 bg-white/10 mx-1" />
-
-        {tools.map((tool) => {
-          const isActive = activeTool === tool.id
-          return (
-            <button
-              key={tool.id}
-              title={tool.title}
-              aria-label={tool.title}
-              aria-pressed={isActive}
-              onClick={() => setActiveTool(tool.id)}
-              className={[
-                'flex flex-col items-center gap-1 px-4 py-2 rounded-xl text-xs font-medium transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900',
-                isActive
-                  ? 'bg-blue-600 text-white shadow-[0_0_12px_rgba(59,130,246,0.5)]'
-                  : 'text-zinc-400 hover:text-white hover:bg-white/8'
-              ].join(' ')}
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              aria-hidden="true"
             >
-              {tool.icon}
-              <span className="leading-none">{tool.label}</span>
-            </button>
-          )
-        })}
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.8}
+                d="M9 14L4 9m0 0l5-5M4 9h10a6 6 0 016 6v1"
+              />
+            </svg>
+            <span className="leading-none">Undo</span>
+          </button>
 
-        {/* 구분선 */}
-        <div className="w-px h-8 bg-white/10 mx-1" />
+          <button
+            title="다시 실행 (Ctrl+Y)"
+            aria-label="다시 실행"
+            disabled={!canRedo}
+            onClick={() => {
+              window.dispatchEvent(new KeyboardEvent('keydown', { key: 'y', ctrlKey: true }))
+            }}
+            className={[
+              'flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900',
+              canRedo
+                ? 'text-zinc-300 hover:text-white hover:bg-white/8'
+                : 'text-zinc-600 cursor-not-allowed opacity-50'
+            ].join(' ')}
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.8}
+                d="M15 14l5-5m0 0l-5-5m5 5H10a6 6 0 00-6 6v1"
+              />
+            </svg>
+            <span className="leading-none">Redo</span>
+          </button>
 
-        <div className="px-2 text-xs text-zinc-300 whitespace-nowrap" aria-live="polite">
-          현재 도구: {activeToolLabel}
+          <div className="w-px h-8 bg-white/10 mx-1" />
+
+          {tools.map((tool) => {
+            const isActive = activeTool === tool.id
+            return (
+              <button
+                key={tool.id}
+                title={tool.title}
+                aria-label={tool.title}
+                aria-pressed={isActive}
+                onClick={() => setActiveTool(tool.id)}
+                className={[
+                  'flex flex-col items-center gap-1 px-4 py-2 rounded-xl text-xs font-medium transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900',
+                  isActive
+                    ? 'bg-blue-600 text-white shadow-[0_0_12px_rgba(59,130,246,0.5)]'
+                    : 'text-zinc-400 hover:text-white hover:bg-white/8'
+                ].join(' ')}
+              >
+                {tool.icon}
+                <span className="leading-none">{tool.label}</span>
+              </button>
+            )
+          })}
+
+          {activeTool === 'arrow' && (
+            <label className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-xl bg-blue-500/10 border border-blue-400/20 text-xs text-blue-100">
+              <span className="leading-none font-medium whitespace-nowrap">경로</span>
+              <select
+                aria-label="화살표 경로 선택"
+                value={arrowRouting}
+                onChange={handleArrowRoutingChange}
+                className="min-w-20 rounded-lg border border-blue-300/20 bg-zinc-950/85 px-2 py-1 text-xs text-white outline-none transition focus:border-blue-400/70"
+              >
+                {arrowRoutingOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
 
-        {/* 구분선 */}
-        <div className="w-px h-8 bg-white/10 mx-1" />
+        <div className="flex items-center gap-1">
+          <div className="px-2 text-xs text-zinc-300 whitespace-nowrap" aria-live="polite">
+            현재 도구: {activeToolLabel}
+          </div>
 
-        {/* Ctrl+C 복사 버튼 */}
-        <button
-          title="클립보드에 복사 (Ctrl+C)"
-          aria-label="클립보드에 복사"
-          onClick={() => {
-            window.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))
-          }}
-          className={[
-            'flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900',
-            copied
-              ? 'bg-emerald-500/25 text-emerald-200'
-              : 'text-zinc-400 hover:text-white hover:bg-white/8'
-          ].join(' ')}
-        >
-          <svg
-            className="w-7 h-7"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            aria-hidden="true"
+          <div className="w-px h-8 bg-white/10 mx-1" />
+
+          <button
+            title="클립보드에 복사 (Ctrl+C)"
+            aria-label="클립보드에 복사"
+            onClick={() => {
+              window.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', ctrlKey: true }))
+            }}
+            className={[
+              'flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900',
+              copied
+                ? 'bg-emerald-500/25 text-emerald-200'
+                : 'text-zinc-400 hover:text-white hover:bg-white/8'
+            ].join(' ')}
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.8}
-              d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"
-            />
-          </svg>
-          <span className="leading-none whitespace-nowrap">{copied ? '복사됨' : '복사'}</span>
-        </button>
+            <svg
+              className="w-7 h-7"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.8}
+                d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3"
+              />
+            </svg>
+            <span className="leading-none whitespace-nowrap">{copied ? '복사됨' : '복사'}</span>
+          </button>
 
-        <button
-          title="파일로 저장 (Ctrl+S)"
-          aria-label="파일로 저장"
-          onClick={handleSave}
-          disabled={saving}
-          className={[
-            'flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900',
-            saving
-              ? 'bg-blue-600/25 text-blue-200 cursor-wait'
-              : 'text-zinc-400 hover:text-white hover:bg-white/8'
-          ].join(' ')}
-        >
-          <svg
-            className="w-7 h-7"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            aria-hidden="true"
+          <button
+            title="파일로 저장 (Ctrl+S)"
+            aria-label="파일로 저장"
+            onClick={handleSave}
+            disabled={saving}
+            className={[
+              'flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900',
+              saving
+                ? 'bg-blue-600/25 text-blue-200 cursor-wait'
+                : 'text-zinc-400 hover:text-white hover:bg-white/8'
+            ].join(' ')}
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.8}
-              d="M12 19l9 2-9-18-9 18 9-2m0 0v-8m0 8H3m18 0h3"
-            />
-          </svg>
-          <span className="leading-none whitespace-nowrap">{saving ? '저장중' : '저장'}</span>
-        </button>
+            <svg
+              className="w-7 h-7"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.8}
+                d="M12 19l9 2-9-18-9 18 9-2m0 0v-8m0 8H3m18 0h3"
+              />
+            </svg>
+            <span className="leading-none whitespace-nowrap">{saving ? '저장중' : '저장'}</span>
+          </button>
 
-        <button
-          title="이미지 파일 삽입"
-          aria-label="이미지 파일 삽입"
-          onClick={handleSelectImageFile}
-          className="flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 whitespace-nowrap text-zinc-400 hover:text-white hover:bg-white/8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
-        >
-          <svg
-            className="w-7 h-7"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            aria-hidden="true"
+          <button
+            title="이미지 파일 삽입"
+            aria-label="이미지 파일 삽입"
+            onClick={handleSelectImageFile}
+            className="flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 whitespace-nowrap text-zinc-400 hover:text-white hover:bg-white/8 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.8}
-              d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-9-8h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-            />
-          </svg>
-          <span className="leading-none whitespace-nowrap">이미지</span>
-        </button>
+            <svg
+              className="w-7 h-7"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.8}
+                d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-9-8h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+              />
+            </svg>
+            <span className="leading-none whitespace-nowrap">이미지</span>
+          </button>
 
-        <button
-          title="완전 초기화 (Ctrl+Shift+R)"
-          aria-label="완전 초기화"
-          onClick={() => {
-            window.dispatchEvent(
-              new KeyboardEvent('keydown', { key: 'R', ctrlKey: true, shiftKey: true })
-            )
-          }}
-          className="flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 whitespace-nowrap text-amber-300 hover:text-white hover:bg-amber-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
-        >
-          <svg
-            className="w-7 h-7"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            aria-hidden="true"
+          <button
+            title="완전 초기화 (Ctrl+Shift+R)"
+            aria-label="완전 초기화"
+            onClick={() => {
+              window.dispatchEvent(
+                new KeyboardEvent('keydown', { key: 'R', ctrlKey: true, shiftKey: true })
+              )
+            }}
+            className="flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 whitespace-nowrap text-amber-300 hover:text-white hover:bg-amber-500/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900"
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.8}
-              d="M4 4v6h6M20 20v-6h-6M20 10a8 8 0 00-13.657-5.657L4 6M4 14a8 8 0 0013.657 5.657L20 18"
-            />
-          </svg>
-          <span className="leading-none whitespace-nowrap">초기화</span>
-        </button>
+            <svg
+              className="w-7 h-7"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={1.8}
+                d="M4 4v6h6M20 20v-6h-6M20 10a8 8 0 00-13.657-5.657L4 6M4 14a8 8 0 0013.657 5.657L20 18"
+              />
+            </svg>
+            <span className="leading-none whitespace-nowrap">초기화</span>
+          </button>
 
-        <button
-          title="단축키 도움말 (?)"
-          aria-label="단축키 도움말"
-          aria-pressed={showShortcuts}
-          onClick={toggleShortcuts}
-          className={[
-            'flex items-center justify-center w-8 h-8 rounded-xl text-xs font-semibold transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900',
-            showShortcuts
-              ? 'bg-blue-600 text-white shadow-[0_0_12px_rgba(59,130,246,0.5)]'
-              : 'text-zinc-400 hover:text-white hover:bg-white/8'
-          ].join(' ')}
-        >
-          ?
-        </button>
+          <button
+            title="단축키 도움말 (?)"
+            aria-label="단축키 도움말"
+            aria-pressed={showShortcuts}
+            onClick={toggleShortcuts}
+            className={[
+              'flex items-center justify-center w-8 h-8 rounded-xl text-xs font-semibold transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900',
+              showShortcuts
+                ? 'bg-blue-600 text-white shadow-[0_0_12px_rgba(59,130,246,0.5)]'
+                : 'text-zinc-400 hover:text-white hover:bg-white/8'
+            ].join(' ')}
+          >
+            ?
+          </button>
+        </div>
       </div>
     </div>
   )

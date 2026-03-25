@@ -2,6 +2,7 @@ import { create } from 'zustand'
 
 export type Tool = 'select' | 'rect' | 'arrow' | 'number' | 'text' | 'blur'
 export type ToastType = 'success' | 'error' | 'info'
+export type ArrowRouting = 'straight' | 'elbow'
 
 export interface ToastMessage {
   id: number
@@ -12,6 +13,8 @@ export interface ToastMessage {
 interface EditorStore {
   activeTool: Tool
   setActiveTool: (tool: Tool) => void
+  arrowRouting: ArrowRouting
+  setArrowRouting: (routing: ArrowRouting) => void
   showShortcuts: boolean
   setShowShortcuts: (open: boolean) => void
   toggleShortcuts: () => void
@@ -28,6 +31,8 @@ interface EditorStore {
 export const useEditorStore = create<EditorStore>((set) => ({
   activeTool: 'select',
   setActiveTool: (tool) => set({ activeTool: tool }),
+  arrowRouting: 'straight',
+  setArrowRouting: (routing) => set({ arrowRouting: routing }),
   showShortcuts: false,
   setShowShortcuts: (open) => set({ showShortcuts: open }),
   toggleShortcuts: () => set((state) => ({ showShortcuts: !state.showShortcuts })),
