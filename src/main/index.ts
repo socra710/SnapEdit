@@ -1,6 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, clipboard, nativeImage, dialog } from 'electron'
 import { join } from 'path'
-import { mkdirSync, rmSync } from 'fs'
+import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
 
@@ -75,6 +75,10 @@ const isPngDataUrl = (value: string): boolean => {
   return /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value)
 }
 
+const isValidImageDataUrl = (value: string): boolean => {
+  return /^data:image\/(png|jpeg|jpg);base64,[A-Za-z0-9+/=]+$/.test(value)
+}
+
 const validateClipboardImageDataUrl = (dataUrl: unknown): dataUrl is string => {
   if (typeof dataUrl !== 'string' || dataUrl.length === 0) {
     return false
@@ -90,8 +94,10 @@ function createWindow(): void {
   const logoPath = join(__dirname, '../../resources/logo.png')
   const icon = nativeImage.createFromPath(logoPath)
   const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
+    width: 1200,
+    height: 820,
+    minWidth: 980,
+    minHeight: 720,
     show: false,
     autoHideMenuBar: true,
     icon: icon,
@@ -174,6 +180,54 @@ app.whenReady().then(() => {
     } catch (error) {
       console.error('[main] clipboard:write-image failed:', error)
       throw error
+    }
+  })
+
+  // Canvas: 이미지를 파일로 저장
+  ipcMain.handle('canvas:save-image', async (_event, dataUrl: unknown) => {
+    try {
+      if (typeof dataUrl !== 'string' || !isValidImageDataUrl(dataUrl)) {
+        throw new Error('Invalid image data: only PNG or JPEG dataURL is supported')
+      }
+
+      const now = new Date()
+      const dateStr = now.toISOString().split('T')[0]
+      const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '-')
+      const defaultFileName = `SnapEdit_${dateStr}_${timeStr}.png`
+
+      const win = BrowserWindow.getFocusedWindow()
+      if (!win) {
+        throw new Error('No focused window')
+      }
+
+      const { filePath, canceled } = await dialog.showSaveDialog(win, {
+        defaultPath: defaultFileName,
+        filters: [
+          { name: 'PNG Images', extensions: ['png'] },
+          { name: 'All Files', extensions: ['*'] }
+        ]
+      })
+
+      if (canceled || !filePath) {
+        return { success: false, filePath: null, reason: 'user_cancelled' }
+      }
+
+      const img = nativeImage.createFromDataURL(dataUrl)
+      if (img.isEmpty()) {
+        throw new Error('Failed to decode image')
+      }
+
+      const buffer = img.toPNG()
+      writeFileSync(filePath, buffer)
+      console.log('[main] canvas saved:', filePath)
+      return { success: true, filePath }
+    } catch (error) {
+      console.error('[main] canvas:save-image failed:', error)
+      return {
+        success: false,
+        filePath: null,
+        reason: error instanceof Error ? error.message : 'unknown_error'
+      }
     }
   })
 
