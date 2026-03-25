@@ -90,8 +90,10 @@ function createWindow(): void {
   const logoPath = join(__dirname, '../../resources/logo.png')
   const icon = nativeImage.createFromPath(logoPath)
   const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
+    width: 1200,
+    height: 820,
+    minWidth: 980,
+    minHeight: 720,
     show: false,
     autoHideMenuBar: true,
     icon: icon,

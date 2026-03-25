@@ -26,9 +26,17 @@ interface ConnectorEntry {
 
 const MAX_HISTORY_STEPS = 80
 const HISTORY_DEBOUNCE_MS = 100
+const MAX_EXPORT_MULTIPLIER = 2
+
+const getPixelRatioMultiplier = () => {
+  if (typeof window === 'undefined') return 1
+  const pixelRatio = window.devicePixelRatio || 1
+  return Math.min(MAX_EXPORT_MULTIPLIER, Math.max(1, pixelRatio))
+}
 
 export function useCanvas() {
   const canvasRef = useRef<fabric.Canvas | null>(null)
+  const initialCanvasSizeRef = useRef({ width: 300, height: 150 })
   const isDrawing = useRef(false)
   const startPoint = useRef<Point>({ x: 0, y: 0 })
   const activeRect = useRef<fabric.Rect | null>(null)
@@ -657,8 +665,15 @@ export function useCanvas() {
 
     const canvas = new fabric.Canvas(el, {
       selection: true,
-      preserveObjectStacking: true
+      preserveObjectStacking: true,
+      imageSmoothingEnabled: true,
+      enableRetinaScaling: true
     })
+
+    initialCanvasSizeRef.current = {
+      width: canvas.getWidth(),
+      height: canvas.getHeight()
+    }
 
     canvas.on('object:moving', () => {
       const active = canvas.getActiveObject()
@@ -738,18 +753,19 @@ export function useCanvas() {
       const img = await fabric.FabricImage.fromURL(dataUrl)
       const { width, height } = img
 
-      // 화면 크기에 맞게 축소 (최대 1200x800)
-      const maxW = 1200
-      const maxH = 800
-      const scale = Math.min(1, maxW / width, maxH / height)
-      const displayW = Math.round(width * scale)
-      const displayH = Math.round(height * scale)
+      canvas.setWidth(width)
+      canvas.setHeight(height)
 
-      canvas.setWidth(displayW)
-      canvas.setHeight(displayH)
-
-      img.scaleX = scale
-      img.scaleY = scale
+      img.set({
+        left: 0,
+        top: 0,
+        scaleX: 1,
+        scaleY: 1,
+        selectable: false,
+        evented: false,
+        objectCaching: false,
+        noScaleCache: false
+      })
       canvas.backgroundImage = img
       canvas.renderAll()
       captureHistorySnapshot(canvas)
@@ -1226,13 +1242,14 @@ export function useCanvas() {
         }
 
         try {
+          const multiplier = getPixelRatioMultiplier()
           const patchDataUrl = canvas.toDataURL({
             format: 'png',
             left,
             top,
             width,
             height,
-            multiplier: 1
+            multiplier
           })
 
           const blurredPatch = await fabric.FabricImage.fromURL(patchDataUrl)
@@ -1331,6 +1348,157 @@ export function useCanvas() {
     canvas.renderAll()
   }, [])
 
+  /** 전체 선택 */
+  const selectAll = useCallback(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return false
+
+    const selectableObjects = canvas
+      .getObjects()
+      .filter((obj) => obj !== canvas.backgroundImage && !isPreviewPart(obj))
+
+    if (selectableObjects.length === 0) {
+      canvas.discardActiveObject()
+      canvas.renderAll()
+      return false
+    }
+
+    if (selectableObjects.length === 1) {
+      canvas.setActiveObject(selectableObjects[0])
+    } else {
+      const selection = new fabric.ActiveSelection(selectableObjects, { canvas })
+      canvas.setActiveObject(selection)
+    }
+
+    canvas.renderAll()
+    return true
+  }, [])
+
+  /** 선택된 객체 이동 */
+  const moveSelectedBy = useCallback((dx: number, dy: number) => {
+    const canvas = canvasRef.current
+    if (!canvas) return false
+
+    const activeObject = canvas.getActiveObject()
+    if (!activeObject) return false
+
+    activeObject.set({
+      left: (activeObject.left ?? 0) + dx,
+      top: (activeObject.top ?? 0) + dy
+    })
+
+    activeObject.setCoords()
+
+    if (activeObject instanceof fabric.ActiveSelection) {
+      activeObject.getObjects().forEach((obj) => {
+        obj.setCoords()
+        updateConnectorsForObject(canvas, obj)
+      })
+    } else {
+      updateConnectorsForObject(canvas, activeObject as fabric.Object)
+    }
+
+    queueHistorySnapshot(canvas)
+    scheduleCanvasRender(canvas)
+    return true
+  }, [])
+
+  /** 선택된 객체 복제 */
+  const duplicateSelected = useCallback(async () => {
+    const canvas = canvasRef.current
+    if (!canvas) return false
+
+    const activeObject = canvas.getActiveObject()
+    if (!activeObject) return false
+
+    const offset = 20
+    const clones: fabric.Object[] = []
+
+    if (activeObject instanceof fabric.ActiveSelection) {
+      const selectedObjects = [...activeObject.getObjects()]
+      canvas.discardActiveObject()
+
+      for (const obj of selectedObjects) {
+        if (isConnectorPart(obj) || isPreviewPart(obj)) continue
+        const cloned = await obj.clone()
+        ensureObjectId(cloned)
+        cloned.set({
+          left: (obj.left ?? 0) + offset,
+          top: (obj.top ?? 0) + offset,
+          selectable: true,
+          evented: true
+        })
+        canvas.add(cloned)
+        clones.push(cloned)
+      }
+    } else {
+      if (isConnectorPart(activeObject) || isPreviewPart(activeObject)) return false
+
+      const cloned = await activeObject.clone()
+      ensureObjectId(cloned)
+      cloned.set({
+        left: (activeObject.left ?? 0) + offset,
+        top: (activeObject.top ?? 0) + offset,
+        selectable: true,
+        evented: true
+      })
+      canvas.discardActiveObject()
+      canvas.add(cloned)
+      clones.push(cloned)
+    }
+
+    if (clones.length === 0) {
+      canvas.renderAll()
+      return false
+    }
+
+    if (clones.length === 1) {
+      canvas.setActiveObject(clones[0])
+    } else {
+      const selection = new fabric.ActiveSelection(clones, { canvas })
+      canvas.setActiveObject(selection)
+    }
+
+    queueHistorySnapshot(canvas)
+    canvas.renderAll()
+    return true
+  }, [])
+
+  /** dataURL 이미지를 오브젝트로 삽입 */
+  const insertImageObject = useCallback(async (dataUrl: string) => {
+    const canvas = canvasRef.current
+    if (!canvas) return false
+
+    try {
+      const image = await fabric.FabricImage.fromURL(dataUrl)
+      const maxDisplayWidth = Math.max(160, Math.floor(canvas.getWidth() * 0.7))
+      const maxDisplayHeight = Math.max(120, Math.floor(canvas.getHeight() * 0.7))
+      const scale = Math.min(1, maxDisplayWidth / image.width, maxDisplayHeight / image.height)
+
+      image.set({
+        left: Math.max(0, (canvas.getWidth() - image.width * scale) / 2),
+        top: Math.max(0, (canvas.getHeight() - image.height * scale) / 2),
+        scaleX: scale,
+        scaleY: scale,
+        selectable: true,
+        evented: true,
+        objectCaching: false,
+        noScaleCache: false
+      })
+
+      ensureObjectId(image)
+      canvas.add(image)
+      canvas.setActiveObject(image)
+      queueHistorySnapshot(canvas, image)
+      canvas.renderAll()
+      return true
+    } catch (error) {
+      console.error('오브젝트 이미지 삽입 실패:', error)
+      useEditorStore.getState().showToast('이미지를 삽입할 수 없습니다.', 'error')
+      return false
+    }
+  }, [])
+
   /** 되돌리기 (향후 구현) */
   const undo = useCallback(() => {
     const canvas = canvasRef.current
@@ -1355,7 +1523,60 @@ export function useCanvas() {
 
   /** 현재 캔버스를 dataURL로 내보내기 */
   const exportAsDataURL = useCallback((): string | null => {
-    return canvasRef.current?.toDataURL({ format: 'png', multiplier: 1 }) ?? null
+    const multiplier = getPixelRatioMultiplier()
+    return canvasRef.current?.toDataURL({ format: 'png', multiplier }) ?? null
+  }, [])
+
+  const resetNumberCounter = useCallback(() => {
+    numberCounter.current = 1
+  }, [])
+
+  const resetToInitialState = useCallback(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    if (historyTimerRef.current) {
+      clearTimeout(historyTimerRef.current)
+      historyTimerRef.current = null
+    }
+    if (renderRafRef.current !== null) {
+      window.cancelAnimationFrame(renderRafRef.current)
+      renderRafRef.current = null
+    }
+
+    isRestoringHistoryRef.current = true
+
+    clearArrowPreview(canvas)
+    clearArrowSource()
+    canvas.discardActiveObject()
+    canvas.off('mouse:down')
+    canvas.off('mouse:move')
+    canvas.off('mouse:up')
+    canvas.clear()
+    canvas.setWidth(initialCanvasSizeRef.current.width)
+    canvas.setHeight(initialCanvasSizeRef.current.height)
+    canvas.selection = true
+    canvas.defaultCursor = 'default'
+
+    connectorsRef.current.clear()
+    objectIdCounter.current = 1
+    connectorIdCounter.current = 1
+    numberCounter.current = 1
+    isDrawing.current = false
+    activeRect.current = null
+    activeArrow.current = null
+    activeArrowHead.current = null
+    activeText.current = null
+    activeNumber.current = null
+    activeBlur.current = null
+
+    historyRef.current = []
+    historyIndexRef.current = -1
+    syncHistoryState()
+    canvas.renderAll()
+
+    isRestoringHistoryRef.current = false
+    captureHistorySnapshot(canvas)
   }, [])
 
   /** 캔버스 인스턴스 반환 */
@@ -1388,10 +1609,16 @@ export function useCanvas() {
     enableTextMode,
     enableNumberMode,
     enableBlurMode,
+    resetNumberCounter,
+    resetToInitialState,
     disableAllDrawingModes,
     disableRectMode,
     exportAsDataURL,
     deleteSelected,
+    selectAll,
+    moveSelectedBy,
+    duplicateSelected,
+    insertImageObject,
     undo,
     redo,
     cleanup
