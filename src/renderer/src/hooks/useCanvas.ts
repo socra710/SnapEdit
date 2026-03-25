@@ -12,7 +12,15 @@ interface Point {
   y: number
 }
 
-type AnchorSide = 'top' | 'right' | 'bottom' | 'left'
+type AnchorSide =
+  | 'top'
+  | 'right'
+  | 'bottom'
+  | 'left'
+  | 'topLeft'
+  | 'topRight'
+  | 'bottomRight'
+  | 'bottomLeft'
 
 interface ConnectorEntry {
   id: string
@@ -27,6 +35,29 @@ interface ConnectorEntry {
 const MAX_HISTORY_STEPS = 80
 const HISTORY_DEBOUNCE_MS = 100
 const MAX_EXPORT_MULTIPLIER = 2
+
+// 화살표 스타일 설정
+const ARROW_STROKE_WIDTH = 2
+const ARROW_HEAD_SIZE = 15
+const ARROW_COLOR = '#FF0000'
+const ARROW_SELECTED_COLOR = '#3B82F6'
+
+const ANCHOR_SIDES: AnchorSide[] = [
+  'top',
+  'topRight',
+  'right',
+  'bottomRight',
+  'bottom',
+  'bottomLeft',
+  'left',
+  'topLeft'
+]
+
+// 앵커 포인트 설정
+const ANCHOR_SNAP_RADIUS = 28 // 앵커 직접 스냅 범위
+const ANCHOR_MAGNET_RADIUS = 64 // 객체 근처 자석 보정 범위
+const ANCHOR_CORNER_PRIORITY_BIAS = 8 // 코너 앵커 우선 선택 보정값
+const ANCHOR_LOCK_RELEASE_RADIUS = 42 // 드래그 중 스냅 고정 해제 반경
 
 const getPixelRatioMultiplier = () => {
   if (typeof window === 'undefined') return 1
@@ -50,6 +81,7 @@ export function useCanvas() {
   const objectIdCounter = useRef(1)
   const connectorIdCounter = useRef(1)
   const connectorsRef = useRef<Map<string, ConnectorEntry>>(new Map())
+  const anchorIndicatorsRef = useRef<fabric.Circle[]>([])
   const numberCounter = useRef(1)
   const historyRef = useRef<string[]>([])
   const historyIndexRef = useRef(-1)
@@ -65,7 +97,18 @@ export function useCanvas() {
   }
 
   const isAnchorSide = (value: unknown): value is AnchorSide => {
-    return value === 'top' || value === 'right' || value === 'bottom' || value === 'left'
+    return ANCHOR_SIDES.includes(value as AnchorSide)
+  }
+
+  const isCornerAnchor = (side: AnchorSide): boolean => {
+    return (
+      side === 'topLeft' || side === 'topRight' || side === 'bottomRight' || side === 'bottomLeft'
+    )
+  }
+
+  const getAnchorDistanceScore = (distance: number, side: AnchorSide): number => {
+    if (!isCornerAnchor(side)) return distance
+    return Math.max(0, distance - ANCHOR_CORNER_PRIORITY_BIAS)
   }
 
   const getObjectData = (obj: fabric.Object): Record<string, unknown> => {
@@ -87,6 +130,11 @@ export function useCanvas() {
   const isConnectorPart = (obj: fabric.Object | null | undefined): boolean => {
     if (!obj) return false
     return getObjectData(obj).isConnectorPart === true
+  }
+
+  const isFreeArrow = (obj: fabric.Object | null | undefined): boolean => {
+    if (!obj) return false
+    return getObjectData(obj).isFreeArrow === true
   }
 
   const isPreviewPart = (obj: fabric.Object | null | undefined): boolean => {
@@ -142,6 +190,7 @@ export function useCanvas() {
     if (!obj) return false
     if (obj === canvas.backgroundImage) return false
     if (isConnectorPart(obj)) return false
+    if (isFreeArrow(obj)) return false
     if (isPreviewPart(obj)) return false
     return true
   }
@@ -165,24 +214,28 @@ export function useCanvas() {
 
     return {
       top: { x: centerX, y: top },
+      topRight: { x: right, y: top },
       right: { x: right, y: centerY },
+      bottomRight: { x: right, y: bottom },
       bottom: { x: centerX, y: bottom },
-      left: { x: left, y: centerY }
+      bottomLeft: { x: left, y: bottom },
+      left: { x: left, y: centerY },
+      topLeft: { x: left, y: top }
     }
   }
 
   const getNearestAnchorSide = (obj: fabric.Object, reference: Point): AnchorSide => {
     const anchors = getAnchorPoints(obj)
-    const sides: AnchorSide[] = ['top', 'right', 'bottom', 'left']
 
     let nearestSide: AnchorSide = 'top'
     let minDistance = Number.POSITIVE_INFINITY
 
-    sides.forEach((side) => {
+    ANCHOR_SIDES.forEach((side) => {
       const anchor = anchors[side]
       const distance = Math.hypot(anchor.x - reference.x, anchor.y - reference.y)
-      if (distance < minDistance) {
-        minDistance = distance
+      const score = getAnchorDistanceScore(distance, side)
+      if (score < minDistance) {
+        minDistance = score
         nearestSide = side
       }
     })
@@ -192,6 +245,93 @@ export function useCanvas() {
 
   const getAnchorPoint = (obj: fabric.Object, side: AnchorSide): Point => {
     return getAnchorPoints(obj)[side]
+  }
+
+  // 포인터 근처의 앵커 포인트 찾기
+  const getAnchorPointNearPointer = (obj: fabric.Object, pointerPos: Point): AnchorSide | null => {
+    const anchors = getAnchorPoints(obj)
+
+    let nearestSide: AnchorSide = 'top'
+    let minScore = Number.POSITIVE_INFINITY
+    let nearestWithinSnap: AnchorSide | null = null
+    let nearestWithinSnapScore = Number.POSITIVE_INFINITY
+
+    for (const side of ANCHOR_SIDES) {
+      const anchor = anchors[side]
+      const distance = Math.hypot(anchor.x - pointerPos.x, anchor.y - pointerPos.y)
+      const score = getAnchorDistanceScore(distance, side)
+      if (score < minScore) {
+        minScore = score
+        nearestSide = side
+      }
+
+      if (distance <= ANCHOR_SNAP_RADIUS) {
+        if (score < nearestWithinSnapScore) {
+          nearestWithinSnapScore = score
+          nearestWithinSnap = side
+        }
+      }
+    }
+
+    if (nearestWithinSnap) {
+      return nearestWithinSnap
+    }
+
+    const bounds = obj.getBoundingRect()
+    const isNearObjectBounds =
+      pointerPos.x >= bounds.left - ANCHOR_MAGNET_RADIUS &&
+      pointerPos.x <= bounds.left + bounds.width + ANCHOR_MAGNET_RADIUS &&
+      pointerPos.y >= bounds.top - ANCHOR_MAGNET_RADIUS &&
+      pointerPos.y <= bounds.top + bounds.height + ANCHOR_MAGNET_RADIUS
+
+    if (isNearObjectBounds) {
+      return nearestSide
+    }
+
+    return null
+  }
+
+  // 마우스 포인터 근처의 앵커 포인트를 시각적으로 강조
+  const drawAnchorIndicators = (
+    canvas: fabric.Canvas,
+    obj: fabric.Object,
+    highlight?: AnchorSide
+  ) => {
+    // 기존 인디케이터 제거
+    anchorIndicatorsRef.current.forEach((circle) => {
+      canvas.remove(circle)
+    })
+    anchorIndicatorsRef.current = []
+
+    const anchors = getAnchorPoints(obj)
+
+    ANCHOR_SIDES.forEach((side) => {
+      const anchor = anchors[side]
+      const isHighlighted = side === highlight
+
+      const circle = new fabric.Circle({
+        radius: isHighlighted ? 8 : 5,
+        left: anchor.x - (isHighlighted ? 8 : 5),
+        top: anchor.y - (isHighlighted ? 8 : 5),
+        fill: isHighlighted ? '#3B82F6' : 'rgba(255, 255, 255, 0.4)',
+        stroke: isHighlighted ? '#1E40AF' : 'rgba(255, 255, 255, 0.6)',
+        strokeWidth: 1.5,
+        selectable: false,
+        evented: false,
+        absolutePositioned: true
+      })
+
+      patchObjectData(circle, { isAnchorIndicator: true })
+      anchorIndicatorsRef.current.push(circle)
+      canvas.add(circle)
+    })
+  }
+
+  const clearAnchorIndicators = (canvas: fabric.Canvas) => {
+    anchorIndicatorsRef.current.forEach((circle) => {
+      canvas.remove(circle)
+    })
+    anchorIndicatorsRef.current = []
   }
 
   const clearArrowPreview = (canvas: fabric.Canvas) => {
@@ -239,7 +379,8 @@ export function useCanvas() {
       sourcePoint.x,
       sourcePoint.y,
       targetPoint.x,
-      targetPoint.y
+      targetPoint.y,
+      ARROW_HEAD_SIZE
     )
     connector.head.set({ points: headPoints })
     connector.head.setCoords()
@@ -318,24 +459,11 @@ export function useCanvas() {
     })
   }
 
-  const drawArrowPreview = (
-    canvas: fabric.Canvas,
-    sourceObj: fabric.Object,
-    pointer: Point,
-    hoveredTarget: fabric.Object | null
-  ) => {
-    const sourceReference = hoveredTarget ? getObjectCenter(hoveredTarget) : pointer
-    const sourceAnchor = getNearestAnchorSide(sourceObj, sourceReference)
-    const sourcePoint = getAnchorPoint(sourceObj, sourceAnchor)
-
-    const endPoint = hoveredTarget
-      ? getAnchorPoint(hoveredTarget, getNearestAnchorSide(hoveredTarget, sourcePoint))
-      : pointer
-
+  const drawArrowPreview = (canvas: fabric.Canvas, start: Point, end: Point) => {
     if (!activeArrow.current) {
-      const previewLine = new fabric.Line([sourcePoint.x, sourcePoint.y, endPoint.x, endPoint.y], {
-        stroke: '#FF0000',
-        strokeWidth: 2,
+      const previewLine = new fabric.Line([start.x, start.y, end.x, end.y], {
+        stroke: ARROW_COLOR,
+        strokeWidth: ARROW_STROKE_WIDTH,
         fill: 'transparent',
         selectable: false,
         evented: false,
@@ -347,20 +475,20 @@ export function useCanvas() {
       canvas.add(previewLine)
     } else {
       activeArrow.current.set({
-        x1: sourcePoint.x,
-        y1: sourcePoint.y,
-        x2: endPoint.x,
-        y2: endPoint.y
+        x1: start.x,
+        y1: start.y,
+        x2: end.x,
+        y2: end.y
       })
       activeArrow.current.setCoords()
     }
 
     if (!activeArrowHead.current) {
       const previewHead = new fabric.Polygon(
-        calculateArrowHeadPoints(sourcePoint.x, sourcePoint.y, endPoint.x, endPoint.y),
+        calculateArrowHeadPoints(start.x, start.y, end.x, end.y, ARROW_HEAD_SIZE),
         {
-          fill: '#FF0000',
-          stroke: '#FF0000',
+          fill: ARROW_COLOR,
+          stroke: ARROW_COLOR,
           strokeWidth: 0,
           selectable: false,
           evented: false,
@@ -372,39 +500,79 @@ export function useCanvas() {
       canvas.add(previewHead)
     } else {
       activeArrowHead.current.set({
-        points: calculateArrowHeadPoints(sourcePoint.x, sourcePoint.y, endPoint.x, endPoint.y)
+        points: calculateArrowHeadPoints(start.x, start.y, end.x, end.y, ARROW_HEAD_SIZE)
       })
       activeArrowHead.current.setCoords()
     }
   }
 
+  const createFreeArrow = (canvas: fabric.Canvas, start: Point, end: Point) => {
+    const line = new fabric.Line([start.x, start.y, end.x, end.y], {
+      stroke: ARROW_COLOR,
+      strokeWidth: ARROW_STROKE_WIDTH,
+      fill: 'transparent',
+      selectable: false,
+      evented: false
+    })
+
+    const head = new fabric.Polygon(
+      calculateArrowHeadPoints(start.x, start.y, end.x, end.y, ARROW_HEAD_SIZE),
+      {
+        fill: ARROW_COLOR,
+        stroke: ARROW_COLOR,
+        strokeWidth: 0,
+        selectable: false,
+        evented: false
+      }
+    )
+
+    const group = new fabric.Group([line, head], {
+      selectable: true,
+      evented: true
+    })
+
+    ensureObjectId(group)
+    patchObjectData(group, { isFreeArrow: true })
+    canvas.add(group)
+    canvas.setActiveObject(group)
+  }
+
   const createConnector = (
     canvas: fabric.Canvas,
     sourceObj: fabric.Object,
-    targetObj: fabric.Object
+    targetObj: fabric.Object,
+    sourceAnchorForce?: AnchorSide,
+    targetAnchorForce?: AnchorSide
   ) => {
     const sourceObjectId = ensureObjectId(sourceObj)
     const targetObjectId = ensureObjectId(targetObj)
     const connectorId = `connector-${connectorIdCounter.current++}`
 
-    const sourceAnchor = getNearestAnchorSide(sourceObj, getObjectCenter(targetObj))
+    const sourceAnchor =
+      sourceAnchorForce || getNearestAnchorSide(sourceObj, getObjectCenter(targetObj))
     const sourcePoint = getAnchorPoint(sourceObj, sourceAnchor)
-    const targetAnchor = getNearestAnchorSide(targetObj, sourcePoint)
+    const targetAnchor = targetAnchorForce || getNearestAnchorSide(targetObj, sourcePoint)
     const targetPoint = getAnchorPoint(targetObj, targetAnchor)
 
     const line = new fabric.Line([sourcePoint.x, sourcePoint.y, targetPoint.x, targetPoint.y], {
-      stroke: '#FF0000',
-      strokeWidth: 2,
+      stroke: ARROW_COLOR,
+      strokeWidth: ARROW_STROKE_WIDTH,
       fill: 'transparent',
       selectable: true,
       evented: true
     })
 
     const head = new fabric.Polygon(
-      calculateArrowHeadPoints(sourcePoint.x, sourcePoint.y, targetPoint.x, targetPoint.y),
+      calculateArrowHeadPoints(
+        sourcePoint.x,
+        sourcePoint.y,
+        targetPoint.x,
+        targetPoint.y,
+        ARROW_HEAD_SIZE
+      ),
       {
-        fill: '#FF0000',
-        stroke: '#FF0000',
+        fill: ARROW_COLOR,
+        stroke: ARROW_COLOR,
         strokeWidth: 0,
         selectable: false,
         evented: false
@@ -713,6 +881,14 @@ export function useCanvas() {
       if (data.isConnectorPart === true) {
         const connectorId = data.connectorId
         if (typeof connectorId === 'string') {
+          const hasSiblingPart = canvas
+            .getObjects()
+            .some((obj) => obj !== target && getObjectData(obj).connectorId === connectorId)
+
+          if (hasSiblingPart) {
+            return
+          }
+
           const connector = connectorsRef.current.get(connectorId)
           if (connector) {
             connectorsRef.current.delete(connectorId)
@@ -727,7 +903,13 @@ export function useCanvas() {
 
       const objectId = data.objectId
       if (typeof objectId === 'string') {
-        removeConnectorsForObjectId(canvas, objectId)
+        const stillExists = canvas
+          .getObjects()
+          .some((obj) => obj !== target && getObjectData(obj).objectId === objectId)
+
+        if (!stillExists) {
+          removeConnectorsForObjectId(canvas, objectId)
+        }
       }
 
       if (activeArrowSource.current === target) {
@@ -779,6 +961,8 @@ export function useCanvas() {
   const enableRectMode = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) return
+
+    useEditorStore.getState().showToast('영역을 드래그하세요', 'info', 1500)
 
     // 이전 이벤트 핸들러 모두 제거
     canvas.off('mouse:down')
@@ -886,6 +1070,8 @@ export function useCanvas() {
     const canvas = canvasRef.current
     if (!canvas) return
 
+    useEditorStore.getState().showToast('드래그해서 화살표를 그리세요', 'info', 1500)
+
     // 이전 이벤트 핸들러 모두 제거
     canvas.off('mouse:down')
     canvas.off('mouse:move')
@@ -901,6 +1087,78 @@ export function useCanvas() {
       obj.evented = false
     })
 
+    let isArrowDrawing = false
+    let arrowStartPoint: Point | null = null
+    let arrowSnapSource: { obj: fabric.Object; anchor: AnchorSide } | null = null
+    let arrowSnapTarget: { obj: fabric.Object; anchor: AnchorSide } | null = null
+
+    const getSnapFromPointer = (
+      pointer: Point,
+      excludeObject?: fabric.Object
+    ): { obj: fabric.Object; anchor: AnchorSide; point: Point } | null => {
+      const objects = canvas.getObjects()
+      let bestMatch: {
+        obj: fabric.Object
+        anchor: AnchorSide
+        point: Point
+        score: number
+      } | null = null
+
+      for (let i = objects.length - 1; i >= 0; i--) {
+        const candidate = objects[i]
+        if (!isConnectableObject(canvas, candidate)) continue
+        if (excludeObject && candidate === excludeObject) continue
+
+        const bounds = candidate.getBoundingRect()
+        const dx =
+          pointer.x < bounds.left
+            ? bounds.left - pointer.x
+            : pointer.x > bounds.left + bounds.width
+              ? pointer.x - (bounds.left + bounds.width)
+              : 0
+        const dy =
+          pointer.y < bounds.top
+            ? bounds.top - pointer.y
+            : pointer.y > bounds.top + bounds.height
+              ? pointer.y - (bounds.top + bounds.height)
+              : 0
+        const distanceToBounds = Math.hypot(dx, dy)
+        if (distanceToBounds > ANCHOR_MAGNET_RADIUS) continue
+
+        const anchor = getAnchorPointNearPointer(candidate, pointer)
+        if (!anchor) continue
+
+        const anchorPoint = getAnchorPoint(candidate, anchor)
+        const anchorDistance = Math.hypot(anchorPoint.x - pointer.x, anchorPoint.y - pointer.y)
+        const zOrderPenalty = (objects.length - 1 - i) * 0.1
+        const score = anchorDistance + distanceToBounds * 0.35 + zOrderPenalty
+
+        if (!bestMatch || score < bestMatch.score) {
+          bestMatch = {
+            obj: candidate,
+            anchor,
+            point: anchorPoint,
+            score
+          }
+        }
+      }
+
+      if (!bestMatch) return null
+
+      return {
+        obj: bestMatch.obj,
+        anchor: bestMatch.anchor,
+        point: bestMatch.point
+      }
+    }
+
+    const resetArrowDrawingState = () => {
+      isArrowDrawing = false
+      arrowStartPoint = null
+      arrowSnapSource = null
+      arrowSnapTarget = null
+    }
+
     const onMouseDown = (opt: fabric.TPointerEventInfo) => {
       const pointer = canvas.getScenePoint(opt.e)
 
@@ -909,89 +1167,175 @@ export function useCanvas() {
         includePreview: false
       })
 
-      if (!hitObject) {
+      if (hitObject && isConnectorPart(hitObject)) {
         clearArrowPreview(canvas)
         clearArrowSource()
-        canvas.discardActiveObject()
-        canvas.renderAll()
-        return
-      }
-
-      if (isConnectorPart(hitObject)) {
-        clearArrowPreview(canvas)
-        clearArrowSource()
+        resetArrowDrawingState()
 
         const connectorId = getObjectData(hitObject).connectorId
         if (typeof connectorId === 'string') {
           const connector = connectorsRef.current.get(connectorId)
           if (connector) {
-            connector.line.set({ selectable: true, evented: true })
+            connector.line.set({
+              selectable: true,
+              evented: true,
+              stroke: ARROW_SELECTED_COLOR
+            })
+            connector.head.set({
+              fill: ARROW_SELECTED_COLOR,
+              stroke: ARROW_SELECTED_COLOR
+            })
             canvas.setActiveObject(connector.line)
+            useEditorStore
+              .getState()
+              .showToast('화살표를 드래그해서 이동하거나 Delete로 삭제하세요', 'info', 1800)
           }
         }
         canvas.renderAll()
         return
       }
 
-      if (!isConnectableObject(canvas, hitObject)) return
-
-      if (!activeArrowSource.current) {
-        activeArrowSource.current = hitObject
-        activeArrowSourceOpacity.current = hitObject.opacity ?? 1
-        hitObject.set({ opacity: 0.7, selectable: true, evented: true })
-        canvas.setActiveObject(hitObject)
-        drawArrowPreview(canvas, hitObject, pointer, null)
-        canvas.renderAll()
-        return
-      }
-
-      const sourceObject = activeArrowSource.current
-
-      if (hitObject === sourceObject) {
+      if (hitObject && isFreeArrow(hitObject)) {
         clearArrowPreview(canvas)
         clearArrowSource()
-        canvas.discardActiveObject()
+        resetArrowDrawingState()
+        hitObject.set({ selectable: true, evented: true })
+        canvas.setActiveObject(hitObject)
         canvas.renderAll()
         return
       }
 
-      createConnector(canvas, sourceObject, hitObject)
-      clearArrowPreview(canvas)
+      isArrowDrawing = true
+      const start = { x: pointer.x, y: pointer.y }
+      const sourceSnap = getSnapFromPointer(start)
+
+      arrowSnapSource = sourceSnap ? { obj: sourceSnap.obj, anchor: sourceSnap.anchor } : null
+      arrowSnapTarget = null
+      arrowStartPoint = sourceSnap ? sourceSnap.point : start
+
       clearArrowSource()
-      canvas.renderAll()
-      onArrowComplete?.()
+      canvas.discardActiveObject()
+
+      if (sourceSnap) {
+        drawAnchorIndicators(canvas, sourceSnap.obj, sourceSnap.anchor)
+      } else {
+        clearAnchorIndicators(canvas)
+      }
+
+      drawArrowPreview(canvas, arrowStartPoint, arrowStartPoint)
+      scheduleCanvasRender(canvas)
     }
 
     const onMouseMove = (opt: fabric.TPointerEventInfo) => {
-      if (!activeArrowSource.current) return
-
       const pointer = canvas.getScenePoint(opt.e)
 
-      const hoveredObject = findTopObjectAtPointer(canvas, pointer, {
-        includeConnectors: false,
-        includePreview: false
-      })
+      if (!isArrowDrawing || !arrowStartPoint) {
+        const hoverSnap = getSnapFromPointer(pointer)
+        if (hoverSnap) {
+          drawAnchorIndicators(canvas, hoverSnap.obj, hoverSnap.anchor)
+        } else {
+          clearAnchorIndicators(canvas)
+        }
 
-      const targetObject =
-        hoveredObject &&
-        hoveredObject !== activeArrowSource.current &&
-        isConnectableObject(canvas, hoveredObject)
-          ? hoveredObject
-          : null
+        scheduleCanvasRender(canvas)
+        return
+      }
 
-      drawArrowPreview(canvas, activeArrowSource.current, pointer, targetObject)
+      const nextTargetSnap = getSnapFromPointer(pointer, arrowSnapSource?.obj)
+      let targetSnap: { obj: fabric.Object; anchor: AnchorSide; point: Point } | null = null
+
+      if (arrowSnapTarget) {
+        const lockedPoint = getAnchorPoint(arrowSnapTarget.obj, arrowSnapTarget.anchor)
+        const lockDistance = Math.hypot(pointer.x - lockedPoint.x, pointer.y - lockedPoint.y)
+
+        if (lockDistance <= ANCHOR_LOCK_RELEASE_RADIUS) {
+          targetSnap = {
+            obj: arrowSnapTarget.obj,
+            anchor: arrowSnapTarget.anchor,
+            point: lockedPoint
+          }
+        } else {
+          arrowSnapTarget = null
+        }
+      }
+
+      if (!targetSnap && nextTargetSnap) {
+        arrowSnapTarget = { obj: nextTargetSnap.obj, anchor: nextTargetSnap.anchor }
+        targetSnap = nextTargetSnap
+      }
+
+      const endPoint = targetSnap ? targetSnap.point : { x: pointer.x, y: pointer.y }
+
+      if (targetSnap) {
+        drawAnchorIndicators(canvas, targetSnap.obj, targetSnap.anchor)
+      } else if (arrowSnapSource) {
+        drawAnchorIndicators(canvas, arrowSnapSource.obj, arrowSnapSource.anchor)
+      } else {
+        clearAnchorIndicators(canvas)
+      }
+
+      drawArrowPreview(canvas, arrowStartPoint, endPoint)
       scheduleCanvasRender(canvas)
+    }
+
+    const onMouseUp = (opt: fabric.TPointerEventInfo) => {
+      if (!isArrowDrawing || !arrowStartPoint) return
+
+      const pointer = canvas.getScenePoint(opt.e)
+      const sourceSnap = arrowSnapSource
+      const targetSnap = arrowSnapTarget
+        ? {
+            obj: arrowSnapTarget.obj,
+            anchor: arrowSnapTarget.anchor,
+            point: getAnchorPoint(arrowSnapTarget.obj, arrowSnapTarget.anchor)
+          }
+        : getSnapFromPointer(pointer, sourceSnap?.obj)
+      const endPoint = targetSnap ? targetSnap.point : { x: pointer.x, y: pointer.y }
+      const distance = Math.hypot(endPoint.x - arrowStartPoint.x, endPoint.y - arrowStartPoint.y)
+
+      if (distance >= 10) {
+        if (sourceSnap && targetSnap) {
+          createConnector(
+            canvas,
+            sourceSnap.obj,
+            targetSnap.obj,
+            sourceSnap.anchor,
+            targetSnap.anchor
+          )
+        } else {
+          createFreeArrow(canvas, arrowStartPoint, endPoint)
+        }
+
+        onArrowComplete?.()
+      }
+
+      clearAnchorIndicators(canvas)
+      clearArrowPreview(canvas)
+      clearArrowSource()
+      resetArrowDrawingState()
+      canvas.renderAll()
     }
 
     canvas.on('mouse:down', onMouseDown)
     canvas.on('mouse:move', onMouseMove)
+    canvas.on('mouse:up', onMouseUp)
 
     // cleanup 함수 반환
     return () => {
       canvas.off('mouse:down', onMouseDown)
       canvas.off('mouse:move', onMouseMove)
+      canvas.off('mouse:up', onMouseUp)
       clearArrowPreview(canvas)
+      clearAnchorIndicators(canvas)
       clearArrowSource()
+      resetArrowDrawingState()
+
+      // 모든 화살표의 색상을 원래대로 복원
+      connectorsRef.current.forEach((connector) => {
+        connector.line.set({ stroke: ARROW_COLOR })
+        connector.head.set({ fill: ARROW_COLOR, stroke: ARROW_COLOR })
+      })
+
       canvas.renderAll()
     }
   }, [])
@@ -1000,6 +1344,8 @@ export function useCanvas() {
   const enableTextMode = useCallback((onComplete?: () => void) => {
     const canvas = canvasRef.current
     if (!canvas) return
+
+    useEditorStore.getState().showToast('텍스트를 입력할 위치를 클릭하세요', 'info', 1500)
 
     // 이전 이벤트 핸들러 모두 제거
     canvas.off('mouse:down')
@@ -1085,6 +1431,8 @@ export function useCanvas() {
     const canvas = canvasRef.current
     if (!canvas) return
 
+    useEditorStore.getState().showToast('숫자를 추가할 위치를 클릭하세요', 'info', 1500)
+
     // 이전 이벤트 핸들러 모두 제거
     canvas.off('mouse:down')
     canvas.off('mouse:move')
@@ -1160,6 +1508,8 @@ export function useCanvas() {
   const enableBlurMode = useCallback(() => {
     const canvas = canvasRef.current
     if (!canvas) return
+
+    useEditorStore.getState().showToast('블러할 영역을 드래그하세요', 'info', 1500)
 
     // 이전 이벤트 핸들러 모두 제거
     canvas.off('mouse:down')

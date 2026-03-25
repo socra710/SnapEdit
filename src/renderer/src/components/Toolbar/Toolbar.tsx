@@ -122,6 +122,7 @@ export default function Toolbar() {
   const toolbarRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [copied, setCopied] = useState(false)
+  const [saving, setSaving] = useState(false)
   const activeToolLabel = useMemo(
     () => tools.find((tool) => tool.id === activeTool)?.label ?? '선택',
     [activeTool]
@@ -177,6 +178,17 @@ export default function Toolbar() {
       window.dispatchEvent(new CustomEvent('snapedit:insert-image-dataurl', { detail: dataUrl }))
     } catch {
       useEditorStore.getState().showToast('이미지를 불러오지 못했습니다.', 'error')
+    }
+  }
+
+  const handleSave = async () => {
+    if (saving) return
+
+    setSaving(true)
+    try {
+      window.dispatchEvent(new CustomEvent('snapedit:request-save', {}))
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -353,6 +365,35 @@ export default function Toolbar() {
             />
           </svg>
           <span className="leading-none whitespace-nowrap">{copied ? '복사됨' : '복사'}</span>
+        </button>
+
+        <button
+          title="파일로 저장 (Ctrl+S)"
+          aria-label="파일로 저장"
+          onClick={handleSave}
+          disabled={saving}
+          className={[
+            'flex items-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-150 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900',
+            saving
+              ? 'bg-blue-600/25 text-blue-200 cursor-wait'
+              : 'text-zinc-400 hover:text-white hover:bg-white/8'
+          ].join(' ')}
+        >
+          <svg
+            className="w-7 h-7"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={1.8}
+              d="M12 19l9 2-9-18-9 18 9-2m0 0v-8m0 8H3m18 0h3"
+            />
+          </svg>
+          <span className="leading-none whitespace-nowrap">{saving ? '저장중' : '저장'}</span>
         </button>
 
         <button

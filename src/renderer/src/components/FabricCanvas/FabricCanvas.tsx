@@ -91,6 +91,28 @@ export default function FabricCanvas() {
     return true
   }, [resetToInitialState, setActiveTool, setBackgroundDataUrl, setShowShortcuts, showToast])
 
+  const handleSaveCanvas = useCallback(async () => {
+    const dataUrl = exportAsDataURL()
+    if (!dataUrl) {
+      showToast('저장할 내용이 없습니다.', 'info')
+      return
+    }
+
+    try {
+      const result = await window.electronAPI.saveCanvasImage(dataUrl)
+      if (result.success) {
+        showToast(`파일이 저장되었습니다: ${result.filePath}`, 'success')
+      } else if (result.reason === 'user_cancelled') {
+        showToast('저장이 취소되었습니다.', 'info', 1200)
+      } else {
+        showToast(`저장에 실패했습니다: ${result.reason}`, 'error')
+      }
+    } catch (error) {
+      console.error('[renderer] handleSaveCanvas failed:', error)
+      showToast('저장 중 오류가 발생했습니다. 다시 시도해 주세요.', 'error')
+    }
+  }, [exportAsDataURL, showToast])
+
   // 캔버스 초기화 (마운트 시 1회)
   useEffect(() => {
     if (elRef.current) {
@@ -295,6 +317,12 @@ export default function FabricCanvas() {
         }
       }
 
+      if ((e.ctrlKey || e.metaKey) && key === 's') {
+        if (isShortcutBlocked) return
+        e.preventDefault()
+        await handleSaveCanvas()
+      }
+
       if ((e.ctrlKey || e.metaKey) && key === 'z') {
         if (isShortcutBlocked) return
         e.preventDefault()
@@ -379,6 +407,7 @@ export default function FabricCanvas() {
     moveSelectedBy,
     redo,
     handleResetToInitialState,
+    handleSaveCanvas,
     resetNumberCounter,
     selectAll,
     setActiveTool,
@@ -405,6 +434,17 @@ export default function FabricCanvas() {
     }
   }, [handleImageInsert])
 
+  useEffect(() => {
+    const handleSaveRequest = async () => {
+      await handleSaveCanvas()
+    }
+
+    window.addEventListener('snapedit:request-save', handleSaveRequest)
+    return () => {
+      window.removeEventListener('snapedit:request-save', handleSaveRequest)
+    }
+  }, [handleSaveCanvas])
+
   // 앱 시작 시 클립보드 이미지 자동 로드
   useEffect(() => {
     if (autoLoadDoneRef.current) return
@@ -429,9 +469,9 @@ export default function FabricCanvas() {
     <div className="relative flex items-center justify-center">
       {/* 배경 이미지가 없을 때 안내 메시지 */}
       {!backgroundDataUrl && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-zinc-500 select-none pointer-events-none">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-zinc-500 select-none pointer-events-none p-12">
           <svg
-            className="w-12 h-12 opacity-40"
+            className="w-16 h-16 opacity-30"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -440,16 +480,28 @@ export default function FabricCanvas() {
               strokeLinecap="round"
               strokeLinejoin="round"
               strokeWidth={1.5}
-              d="M9 12h6m-3-3v6M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+              d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-9-8h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
             />
           </svg>
-          <p className="text-sm">
-            <kbd className="px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-300 text-xs font-mono">
-              Ctrl+V
-            </kbd>{' '}
-            로 클립보드 이미지를 불러오세요
-          </p>
-          <p className="text-xs text-zinc-400">도구 선택 → 편집 → Ctrl+C로 복사</p>
+          <div className="text-center">
+            <p className="text-sm font-medium text-zinc-300 mb-2">시작하기</p>
+            <div className="space-y-1.5 text-xs text-zinc-400">
+              <p>
+                <span className="inline-block px-2 py-0.5 rounded bg-zinc-800 text-zinc-200 font-mono">
+                  Ctrl+V
+                </span>{' '}
+                클립보드 이미지 불러오기
+              </p>
+              <p>
+                또는{' '}
+                <span className="inline-block px-2 py-0.5 rounded bg-zinc-800 text-zinc-200">
+                  이미지
+                </span>{' '}
+                버튼으로 파일 선택
+              </p>
+            </div>
+            <p className="text-xs text-zinc-500 mt-3">편집 후 저장 (Ctrl+S) 또는 복사 (Ctrl+C)</p>
+          </div>
         </div>
       )}
 
@@ -457,22 +509,27 @@ export default function FabricCanvas() {
         <div className="absolute top-3 right-3 z-20 rounded-xl border border-white/10 bg-zinc-900/90 backdrop-blur px-3 py-2 text-xs text-zinc-200 shadow-[0_8px_24px_rgba(0,0,0,0.45)] select-none">
           <p className="font-semibold text-zinc-100 mb-1">단축키</p>
           <ul className="space-y-0.5">
-            <li>V 선택</li>
-            <li>R 사각형</li>
-            <li>A 화살표</li>
-            <li>N 번호</li>
-            <li>Shift+N 번호 초기화</li>
-            <li>T 텍스트</li>
-            <li>B 블러</li>
-            <li>Ctrl+Z / Ctrl+Y 실행취소/다시실행</li>
-            <li>Ctrl+A 전체 선택</li>
-            <li>방향키 이동 (Shift+방향키 10px)</li>
-            <li>Ctrl+D 복제</li>
-            <li>Ctrl+V 붙여넣기</li>
-            <li>Ctrl+C 복사</li>
-            <li>Ctrl+Shift+R 완전 초기화</li>
-            <li>Esc 선택 모드 복귀</li>
-            <li>? 도움말 토글</li>
+            <li>
+              <span className="text-zinc-400">도구:</span> V 선택 | R 사각형 | A 화살표 | N 번호 | T
+              텍스트 | B 블러
+            </li>
+            <li>
+              <span className="text-zinc-400">편집:</span> Ctrl+Z 실행취소 | Ctrl+Y 다시실행
+            </li>
+            <li>
+              <span className="text-zinc-400">선택:</span> Ctrl+A 전체 | Ctrl+D 복제 | Delete 삭제
+            </li>
+            <li>
+              <span className="text-zinc-400">이동:</span> 화살표키 (Shift+화살표 10px)
+            </li>
+            <li>
+              <span className="text-zinc-400">작업:</span> Ctrl+V 붙여넣기 | Ctrl+C 복사 | Ctrl+S
+              저장
+            </li>
+            <li>
+              <span className="text-zinc-400">기타:</span> Shift+N 번호 초기화 | Ctrl+Shift+R 완전
+              초기화 | Esc 복귀
+            </li>
           </ul>
         </div>
       )}
