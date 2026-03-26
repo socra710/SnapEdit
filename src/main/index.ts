@@ -6,6 +6,32 @@ import { autoUpdater } from 'electron-updater'
 
 let sessionDataPath = ''
 
+const initializeSessionDataPath = (): void => {
+  const primaryPath = join(app.getPath('userData'), 'session')
+
+  try {
+    mkdirSync(primaryPath, { recursive: true })
+    app.setPath('sessionData', primaryPath)
+    sessionDataPath = primaryPath
+    return
+  } catch (primaryError) {
+    console.warn('[main] Failed to initialize sessionData in userData:', primaryError)
+  }
+
+  const fallbackPath = join(app.getPath('temp'), 'SnapEdit', 'session')
+
+  try {
+    mkdirSync(fallbackPath, { recursive: true })
+    app.setPath('sessionData', fallbackPath)
+    sessionDataPath = fallbackPath
+  } catch (fallbackError) {
+    console.error('[main] Failed to initialize sessionData fallback path:', fallbackError)
+    sessionDataPath = ''
+  }
+}
+
+initializeSessionDataPath()
+
 const logUpdater = (event: string, detail?: Record<string, unknown>): void => {
   if (detail) {
     console.log(`[updater] ${event}`, detail)
@@ -136,10 +162,6 @@ function createWindow(): void {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
-  sessionDataPath = join(app.getPath('temp'), 'SnapEdit', 'session')
-  mkdirSync(sessionDataPath, { recursive: true })
-  app.setPath('sessionData', sessionDataPath)
-
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 
@@ -254,6 +276,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   if (!sessionDataPath) return
+  if (sessionDataPath !== join(app.getPath('temp'), 'SnapEdit', 'session')) return
   try {
     rmSync(sessionDataPath, { recursive: true, force: true })
   } catch (error) {

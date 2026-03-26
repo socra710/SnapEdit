@@ -3,6 +3,8 @@ import { useEditorStore } from '@renderer/store/editorStore'
 import { useCanvas } from '@renderer/hooks/useCanvas'
 
 export default function FabricCanvas() {
+  const emptyCanvasWidth = 800
+  const emptyCanvasHeight = 450
   const elRef = useRef<HTMLCanvasElement>(null)
   const cleanupRef = useRef<(() => void) | null>(null) // cleanup 함수 저장
   const {
@@ -39,6 +41,11 @@ export default function FabricCanvas() {
   const showToast = useEditorStore((s) => s.showToast)
   const autoLoadDoneRef = useRef(false)
   const [canvasScale, setCanvasScale] = useState(1)
+  const hasLoadedImage = Boolean(backgroundDataUrl)
+
+  const notifyImageRequired = useCallback(() => {
+    showToast('이미지를 먼저 불러와 주세요.', 'info', 1200)
+  }, [showToast])
 
   const handleImageInsert = useCallback(
     async (dataUrl: string, source: 'clipboard' | 'file') => {
@@ -162,6 +169,15 @@ export default function FabricCanvas() {
 
   // 툴 변경 시 드로잉 모드 전환
   useEffect(() => {
+    if (!hasLoadedImage) {
+      if (cleanupRef.current) {
+        cleanupRef.current()
+        cleanupRef.current = null
+      }
+      disableAllDrawingModes()
+      return
+    }
+
     // 이전 cleanup 실행
     if (cleanupRef.current) {
       cleanupRef.current()
@@ -203,6 +219,7 @@ export default function FabricCanvas() {
   }, [
     activeTool,
     arrowRouting,
+    hasLoadedImage,
     enableRectMode,
     enableArrowMode,
     setActiveTool,
@@ -227,6 +244,30 @@ export default function FabricCanvas() {
       if (key === '?' || (e.key === '/' && e.shiftKey)) {
         e.preventDefault()
         toggleShortcuts()
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && key === 'v') {
+        if (isShortcutBlocked) return
+        e.preventDefault()
+        try {
+          const dataUrl = await window.electronAPI.readClipboardImage()
+          if (dataUrl) {
+            await handleImageInsert(dataUrl, 'clipboard')
+          } else {
+            showToast('클립보드에 이미지가 없습니다.', 'info')
+          }
+        } catch {
+          showToast('클립보드 접근에 실패했습니다. 권한을 확인해 주세요.', 'error')
+        }
+        return
+      }
+
+      if (!hasLoadedImage) {
+        if (!isShortcutBlocked && ['r', 'a', 'n', 't', 'b'].includes(key)) {
+          e.preventDefault()
+          notifyImageRequired()
+        }
         return
       }
 
@@ -383,21 +424,6 @@ export default function FabricCanvas() {
           showToast('선택 모드로 전환되었습니다.', 'info', 1200)
         }
       }
-
-      if ((e.ctrlKey || e.metaKey) && key === 'v') {
-        if (isShortcutBlocked) return
-        e.preventDefault()
-        try {
-          const dataUrl = await window.electronAPI.readClipboardImage()
-          if (dataUrl) {
-            await handleImageInsert(dataUrl, 'clipboard')
-          } else {
-            showToast('클립보드에 이미지가 없습니다.', 'info')
-          }
-        } catch {
-          showToast('클립보드 접근에 실패했습니다. 권한을 확인해 주세요.', 'error')
-        }
-      }
     }
 
     window.addEventListener('keydown', handleKeyDown)
@@ -406,7 +432,9 @@ export default function FabricCanvas() {
     deleteSelected,
     duplicateSelected,
     exportAsDataURL,
+    hasLoadedImage,
     moveSelectedBy,
+    notifyImageRequired,
     redo,
     handleResetToInitialState,
     handleSaveCanvas,
@@ -438,6 +466,10 @@ export default function FabricCanvas() {
 
   useEffect(() => {
     const handleSaveRequest = async () => {
+      if (!hasLoadedImage) {
+        notifyImageRequired()
+        return
+      }
       await handleSaveCanvas()
     }
 
@@ -445,7 +477,7 @@ export default function FabricCanvas() {
     return () => {
       window.removeEventListener('snapedit:request-save', handleSaveRequest)
     }
-  }, [handleSaveCanvas])
+  }, [handleSaveCanvas, hasLoadedImage, notifyImageRequired])
 
   // 앱 시작 시 클립보드 이미지 자동 로드
   useEffect(() => {
@@ -468,12 +500,12 @@ export default function FabricCanvas() {
   }, [setBackgroundDataUrl, showToast])
 
   return (
-    <div className="relative flex items-center justify-center">
+    <div className="relative flex min-h-[420px] w-full items-center justify-center">
       {/* 배경 이미지가 없을 때 안내 메시지 */}
       {!backgroundDataUrl && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-zinc-500 select-none pointer-events-none p-12">
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-5 text-zinc-500 select-none pointer-events-none px-6 py-10">
           <svg
-            className="w-16 h-16 opacity-30"
+            className="w-24 h-24 opacity-30"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -485,24 +517,24 @@ export default function FabricCanvas() {
               d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-9-8h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
             />
           </svg>
-          <div className="text-center">
-            <p className="text-sm font-medium text-zinc-300 mb-2">시작하기</p>
-            <div className="space-y-1.5 text-xs text-zinc-400">
+          <div className="w-[min(560px,calc(100vw-48px))] rounded-2xl border border-white/6 bg-zinc-900/40 px-8 py-7 text-center shadow-[0_12px_36px_rgba(0,0,0,0.28)]">
+            <p className="mb-3 text-base font-medium text-zinc-300">시작하기</p>
+            <div className="space-y-2 text-sm text-zinc-400 leading-relaxed">
               <p>
-                <span className="inline-block px-2 py-0.5 rounded bg-zinc-800 text-zinc-200 font-mono">
+                <span className="inline-block rounded bg-zinc-800 px-2.5 py-1 text-sm text-zinc-200 font-mono">
                   Ctrl+V
                 </span>{' '}
                 클립보드 이미지 불러오기
               </p>
               <p>
                 또는{' '}
-                <span className="inline-block px-2 py-0.5 rounded bg-zinc-800 text-zinc-200">
+                <span className="inline-block rounded bg-zinc-800 px-2.5 py-1 text-sm text-zinc-200">
                   이미지
                 </span>{' '}
                 버튼으로 파일 선택
               </p>
             </div>
-            <p className="text-xs text-zinc-500 mt-3">편집 후 저장 (Ctrl+S) 또는 복사 (Ctrl+C)</p>
+            <p className="mt-4 text-sm text-zinc-500">편집 후 저장 (Ctrl+S) 또는 복사 (Ctrl+C)</p>
           </div>
         </div>
       )}
@@ -541,11 +573,17 @@ export default function FabricCanvas() {
         className="rounded shadow-[0_0_0_1px_rgba(255,255,255,0.06),0_8px_32px_rgba(0,0,0,0.6)]"
         style={{
           lineHeight: 0,
+          minWidth: backgroundDataUrl ? undefined : emptyCanvasWidth,
+          minHeight: backgroundDataUrl ? undefined : emptyCanvasHeight,
           transform: `scale(${canvasScale})`,
           transformOrigin: 'center center'
         }}
       >
-        <canvas ref={elRef} />
+        <canvas
+          ref={elRef}
+          width={backgroundDataUrl ? undefined : emptyCanvasWidth}
+          height={backgroundDataUrl ? undefined : emptyCanvasHeight}
+        />
       </div>
     </div>
   )
