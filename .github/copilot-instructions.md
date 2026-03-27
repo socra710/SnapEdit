@@ -34,4 +34,4 @@
 
 - 기능 구현 전: 관련 경계(`main/preload/renderer`)를 먼저 확인
 - 구현 후: 타입/린트/빌드 가능한 범위에서 최소 검증 (`npm run typecheck`)
-- PR 전: `.github/skills/pr-checklist/SKILL.md` 기준으로 점검 (파일이 있을 경우)
+- PR 전: 저장소에 존재하는 점검 스킬/체크리스트가 있으면 그 기준으로 점검
