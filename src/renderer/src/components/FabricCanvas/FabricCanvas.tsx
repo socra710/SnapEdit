@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useEditorStore } from '@renderer/store/editorStore'
+import type { Tool } from '@renderer/store/editorStore'
 import { useCanvas } from '@renderer/hooks/useCanvas'
+
+const toolLabelMap: Record<Tool, string> = {
+  select: '선택',
+  rect: '사각형',
+  arrow: '화살표',
+  number: '번호',
+  text: '텍스트',
+  blur: '블러'
+}
 
 export default function FabricCanvas() {
   const emptyCanvasWidth = 800
@@ -37,11 +47,14 @@ export default function FabricCanvas() {
   const setShowShortcuts = useEditorStore((s) => s.setShowShortcuts)
   const toggleShortcuts = useEditorStore((s) => s.toggleShortcuts)
   const backgroundDataUrl = useEditorStore((s) => s.backgroundDataUrl)
+  const canUndo = useEditorStore((s) => s.canUndo)
+  const canRedo = useEditorStore((s) => s.canRedo)
   const setBackgroundDataUrl = useEditorStore((s) => s.setBackgroundDataUrl)
   const showToast = useEditorStore((s) => s.showToast)
   const autoLoadDoneRef = useRef(false)
   const [canvasScale, setCanvasScale] = useState(1)
   const hasLoadedImage = Boolean(backgroundDataUrl)
+  const activeToolLabel = toolLabelMap[activeTool]
 
   const notifyImageRequired = useCallback(() => {
     showToast('이미지를 먼저 불러와 주세요.', 'info', 1200)
@@ -571,6 +584,8 @@ export default function FabricCanvas() {
       {/* 캔버스 외곽 글로우 테두리 */}
       <div
         className="rounded shadow-[0_0_0_1px_rgba(255,255,255,0.06),0_8px_32px_rgba(0,0,0,0.6)]"
+        role="region"
+        aria-label="이미지 편집 캔버스"
         style={{
           lineHeight: 0,
           minWidth: backgroundDataUrl ? undefined : emptyCanvasWidth,
@@ -581,10 +596,25 @@ export default function FabricCanvas() {
       >
         <canvas
           ref={elRef}
+          aria-label="편집 가능한 이미지 캔버스"
           width={backgroundDataUrl ? undefined : emptyCanvasWidth}
           height={backgroundDataUrl ? undefined : emptyCanvasHeight}
         />
       </div>
+
+      {hasLoadedImage && (
+        <div className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 z-10">
+          <div className="flex items-center gap-2 rounded-full border border-white/10 bg-zinc-950/75 px-3 py-1.5 text-[11px] text-zinc-200 shadow-[0_8px_24px_rgba(0,0,0,0.35)] backdrop-blur">
+            <span>도구: {activeToolLabel}</span>
+            <span className={canUndo ? 'text-emerald-300' : 'text-zinc-400'}>
+              Undo {canUndo ? '가능' : '없음'}
+            </span>
+            <span className={canRedo ? 'text-emerald-300' : 'text-zinc-400'}>
+              Redo {canRedo ? '가능' : '없음'}
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
